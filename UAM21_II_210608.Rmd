@@ -1,0 +1,922 @@
+---
+title: "Introduction to R (II)"
+author: "Roger Bivand"
+date: "Tuesday 8 June 2021"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+theme: united
+bibliography: uam21.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, paged.print=FALSE)
+```
+
+### Copyright
+
+All the material presented here, to the extent it is original, is available under [CC-BY-SA](https://creativecommons.org/licenses/by-sa/4.0/). 
+
+### Required current contributed CRAN packages:
+
+I am running R 4.1.0, with recent `update.packages()`.
+
+```{r, echo=TRUE}
+needed <- c("rgeoda", "digest", "ggplot2", "tmap", "spdep", "spData", "sp", "sf")
+```
+
+### Script
+
+Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210607.zip. Download to suitable location, unzip and use as basis.
+
+
+# Seminar introduction
+
+
+### Schedule
+
+| Time | Topic |
+| :--- | :---- |
+|**Monday 7/6**|    |
+|09.00-12.00| How may we integrate spatial data from different sources? How may we aggregate spatial data? Which data structures are helpful in handling spatial data? |
+|13.00-16.00| Observations of spatial data are related to each other either by distance, or by a graph of edges linking observations seen as being neighbours. How may they be constructed? How may we address the issues raised by the probable presence of spatial autocorrelation in the spatial data that we are using? |
+|**Tuesday 8/6**|    |
+|09.00-12.00| How can we measure global spatial autocorrelation? |
+|13.00-16.00| How can we measure local spatial autocorrelation? |
+|**Monday 14/6**|    |
+|09.00-12.00| How may we fit regression models to spatial data in the presence of spatial autocorrelation? Maximum likelihood and spatial filtering, case weights. |
+|13.00-16.00| How should we interpret the coefficients or impacts of spatial regression models? How may we predict from spatial regession models? |
+|**Tuesday 15/6**|    |
+|09.00-12.00| Multi-level models: at which level in the data may we fit spatial processes? |
+|13.00-16.00| Spatial filtering, hierarchical GLM, GAM, etc., spatial epidemiological approaches |
+|**Monday 21/6**|    |
+|09.00-12.00| Presentations/consultations/discussion |
+|13.00-16.00| Presentations/consultations/discussion |
+
+
+```{r}
+library(sf)
+```
+
+```{r}
+data(pol_pres15, package="spDataLarge")
+pol_pres15 |> 
+    subset(select=c(TERYT, name, types)) |> 
+    head()
+```
+
+```{r}
+library(spdep)
+pol_pres15 |> poly2nb(queen=TRUE) -> nb_q
+nb_q |> nb2listw(style="B") -> lw_q_B
+nb_q |> nb2listw(style="W") -> lw_q_W
+```
+
+
+```{r}
+pol_pres15 |> st_geometry() |> st_centroid(of_largest_polygon=TRUE) -> coords 
+coords |> dnearneigh(0, 18300) -> nb_d183
+nb_d183 |> nbdists(coords) |> lapply(\(x) 1/(x/1000)) -> gwts
+nb_d183 |> nb2listw(glist=gwts, style="B") -> lw_d183_idw_B
+```
+
+# Measures of spatial autocorrelation {#spatautocorr}
+
+When analysing areal data, it has long been recognised that, if present, spatial autocorrelation changes how we may infer, relative to the default position of independent observations. In the presence of spatial autocorrelation, we can predict the values of observation $i$ from the values observed at $j \in N_i$, the set of its proximate neighbours. Early results [@moran48; @geary:54], entered into research practice gradually, for example the social sciences [@duncanetal61]. These results were then collated and extended to yield a set of basic tools of analysis [@cliff+ord:73; @cliff+ord:81]. 
+
+Cliff and Ord [-@cliff+ord:73] generalised and extended the expression of the spatial weights matrix representation as part of the framework for establishing the distribution theory for join count, Moran's $I$ and Geary's $C$ statistics. This development of what have become known as global measures, returning a single value of autocorrelation for the total study area, has been supplemented by local measures returning values for each areal unit [@getis+ord:92; @anselin:95].
+
+## Measures and process mis-specification
+
+Measures of spatial autocorrelation unfortunately pick up other mis-specifications in the way that we model data [@schabenberger+gotway:2005; @McMillen:2003]. For reference, Moran's $I$ is given as [@cliff+ord:81, page 17]:
+
+$$
+I = \frac{n \sum_{(2)} w_{ij} z_i z_j}{S_0 \sum_{i=1}^{n} z_i^2}
+$$
+where $x_i, i=1, \ldots, n$ are $n$ observations on the numeric variable of interest, $z_i = x_i - \bar{x}$, $\bar{x} = \sum_{i=1}^{n} x_i / n$, $\sum_{(2)} = \stackrel{\sum_{i=1}^{n} \sum_{j=1}^{n}}{i \neq j}$, $w_{ij}$ are the spatial weights, and $S_0 = \sum_{(2)} w_{ij}$. 
+First we test a random variable using the Moran test, here under the normality assumption (argument `randomisation=FALSE`, default `TRUE`). Inference is made on the statistic $Z(I) = \frac{I - E(I)}{\sqrt{\mathrm{Var}(I)}}$, the z-value compared with the Normal distribution for $E(I)$ and $\mathrm{Var}(I)$ for the chosen assumptions; this `x` does not show spatial autocorrelation with these spatial weights:
+
+```{r}
+set.seed(1)
+glance_htest <- function(ht) c(ht$estimate, 
+    "Std deviate"=unname(ht$statistic), 
+    "p.value"=unname(ht$p.value))
+(pol_pres15 |> 
+        nrow() |> 
+        rnorm() -> x) |> 
+    moran.test(lw_q_B, randomisation=FALSE, alternative="two.sided") |> 
+    glance_htest()
+```
+The test however fails to detect a missing trend in the data as a missing variable problem, finding spatial autocorrelation instead:
+
+```{r}
+beta <- 0.0015
+coords |> 
+    st_coordinates() |> 
+    subset(select=1, drop=TRUE) |> 
+    (\(x) x/1000)() -> t
+(x + beta * t -> x_t) |> 
+    moran.test(lw_q_B, randomisation=FALSE, alternative="two.sided") |> 
+    glance_htest()
+```
+If we test the residuals of a linear model including the trend, the apparent spatial autocorrelation disappears:
+
+```{r}
+lm(x_t ~ t) |> 
+    lm.morantest(lw_q_B, alternative="two.sided") |> 
+    glance_htest()
+```
+
+A comparison of implementations of measures of spatial autocorrelation shows that a wide range of measures is available in R in a number of packages, chiefly in the **spdep** package, and that differences from other implementations can be attributed to design decisions [@Bivand2018]. The **spdep** package also includes the only implementations of exact and Saddlepoint approximations to global and local Moran's I for regression residuals [@tiefelsdorf:02; @bivandetal:09].
+
+## Global measures
+
+We will begin by examining join count statistics, where `joincount.test()` takes a `factor` vector of values `fx=` and a `listw` object, and returns a list of `htest` (hypothesis test) objects defined in the **stats** package, one `htest` object for each level of the `fx=` argument. The observed counts are of neighbours with the same factor levels, known as same-colour joins.
+
+```{r}
+args(joincount.test)
+```
+The function takes an `alternative=` argument for hypothesis testing, a `sampling=` argument showing the basis for the construction of the variance of the measure, where the default `"nonfree"` choice corresponds to analytical permutation; the `spChk=` argument is retained for backward compatibility. For reference, the counts of factor levels for the type of municipality or Warsaw borough are:
+
+```{r}
+(pol_pres15 |> 
+        st_drop_geometry() |> 
+        subset(select=types, drop=TRUE) -> Types) |> 
+    table()
+```
+Since there are four levels, we re-arrange the list of `htest` objects to give a matrix of estimated results. The observed same-colour join counts are tabulated with their expectations based on the counts of levels of the input factor, so that few joins would be expected between for example Warsaw boroughs, because there are very few of them. The variance calculation uses the underlying constants of the chosen `listw` object and the counts of levels of the input factor. The z-value is obtained in the usual way by dividing the difference between the observed and expected join counts by the square root of the variance.
+
+The join count test was subsequently adapted for multi-colour join counts [@upton+fingleton:85]. The implementation as `joincount.mult()` in **spdep** returns a table based on nonfree sampling, and does not report p-values.
+
+```{r}
+Types |> joincount.multi(listw=lw_q_B)
+```
+
+So far, we have used binary weights, so the sum of join counts multiplied by the weight on that join remains integer. If we change to row standardised weights, where the weights are not unity in all cases, the counts, expectations and variances change, but there are few major changes in the z-values.
+
+Using an inverse distance based `listw` object does, however, change the z-values markedly, because closer centroids are upweighted relatively strongly:
+
+```{r}
+Types |> joincount.multi(listw=lw_d183_idw_B)
+```
+
+The implementation of Moran's $I$ in **spdep** in the `moran.test()` function has similar arguments to those of `joincount.test()`, but `sampling=` is replaced by `randomisation=` to indicate the underlying analytical approach used for calculating the variance of the measure. It is also possible to use ranks rather than numerical values [@cliff+ord:81, p. 46]. The `drop.EI2=` agrument may be used to reproduce results where the final component of the variance term is omitted as found in some legacy software implementations.
+
+```{r}
+args(moran.test)
+```
+
+The default for the `randomisation=` argument is `TRUE`, but here we will simply show that the test under normality is the same as a test of least squares residuals with only the intercept used in the mean model. The spelling of randomisation is that of Cliff and Ord [-@cliff+ord:73].
+
+```{r}
+(pol_pres15 |> 
+        st_drop_geometry() |> 
+        subset(select=I_turnout, drop=TRUE) -> z) |> 
+    moran.test(listw=lw_q_B, randomisation=FALSE) |> 
+    glance_htest()
+```
+
+The `lm.morantest()` function also takes a `resfun=` argument to set the function used to extract the residuals used for testing, and clearly lets us model other salient features of the response variable [@cliff+ord:81, p. 203]. To compare with the standard test, we are only using the intercept here, and as can be seen, the results are the same.
+
+```{r}
+lm(I_turnout ~ 1, pol_pres15) |> 
+    lm.morantest(listw=lw_q_B) |> 
+    glance_htest()
+```
+The only difference between tests under normality and randomisation is that an extra term is added if the kurtosis of the variable of interest indicates a flatter or more peaked distribution, where the measure used is the classical measure of kurtosis. Under the default randomisation assumption of analytical randomisation, the results are largely unchanged.
+
+```{r}
+(z |> 
+    moran.test(listw=lw_q_B) -> mtr) |> 
+    glance_htest()
+```
+
+Of course, from the very beginning, interest was shown in Monte Carlo testing, also known as a Hope-type test and as a permutation bootstrap. By default, `moran.mc()` returns a `"htest"` object, but may simply use `boot::boot()` internally and return a `"boot"` object when `return_boot=TRUE`. In addition the number of simulations of the variable of interest by permutation, that is shuffling the values across the observations at random, needs to be given as `nsim=`.
+
+```{r}
+set.seed(1)
+z |> 
+    moran.mc(listw=lw_q_B, nsim=999, return_boot = TRUE) -> mmc
+```
+The bootstrap permutation retains the outcomes of each of the random permutations, reporting the observed value of the statistic, here Moran's $I$, the difference between this value and the mean of the simulations under randomisation (equivalent to $E(I)$), and the standard deviation of the simulations under randomisation. 
+
+If we compare the Monte Carlo and analytical variances of $I$ under randomisation, we typically see few differences, arguably rendering Monte Carlo testing unnecessary.
+
+```{r}
+c("Permutation bootstrap"=var(mmc$t), 
+  "Analytical randomisation"=unname(mtr$estimate[3]))
+```
+Geary's global $C$ is implemented in `geary.test()` largely following the same argument structure as `moran.test()`. The Getis-Ord $G$ test includes extra arguments to accommodate differences between implementations, as Bivand and Wong [-@Bivand2018] found multiple divergences from the original definitions, often to omit no-neighbour observations generated when using distance band neighbours. It is given by [@getis+ord:92, page 194]. For $G_*$, the $\sum_{(2)}$ constraint is relaxed by including $i$ as a neighbour of itself (thereby also removing the no-neighbour problem, because all observations have at least one neighbour).
+
+Finally, the empirical Bayes Moran's $I$ takes account of the denominator in assessing spatial autocorrelation in rates data [@assuncao+reis:99]. Until now, we have considered the proportion of valid votes cast in relation to the numbers entitled to vote by spatial entity, but using `EBImoran.mc()` we can try to accommodate uncertainty in extreme rates in entities with small numbers entitled to vote. There is, however, little impact on the outcome in this case.
+
+Global measures of spatial autocorrelation using spatial weights objects based on graphs of neighbours are, as we have seen, rather blunt tools, which for interpretation depend critically on a reasoned mean model of the variable in question. If the mean model is just the intercept, the global measures will respond to all kinds of mis-specification, not only spatial autocorrelation. A key source of mis-specification will typically also include the choice of entities for aggregation of data.
+
+### ACS CV data set
+
+```{r}
+df_tracts <- st_read("df_tracts.gpkg")
+```
+
+
+
+```{r}
+(nb_subset <- readRDS("nb_subset.rds"))
+```
+
+
+```{r}
+nc_nb_subset <- n.comp.nb(nb_subset)
+nc_nb_subset$nc
+table(table(nc_nb_subset$comp.id))
+```
+
+
+
+```{r}
+set.ZeroPolicyOption(TRUE)
+lw <- nb2listw(nb_subset, style="W")
+```
+
+
+```{r}
+system.time(mt_med_inc_cv <- moran.test(df_tracts$med_inc_cv, lw, alternative="two.sided"))
+```
+
+
+```{r}
+mt_med_inc_cv
+```
+
+
+
+
+```{r}
+form <- log(med_inc_cv) ~ log1p(vacancy_rate) + log1p(old_rate) + log1p(black_rate) + log1p(hisp_rate) + log1p(group_pop) + log1p(dens)
+```
+
+
+```{r}
+lm_mod <- lm(form, data=df_tracts)
+summary(lm_mod)
+```
+
+
+```{r}
+lm.morantest(lm_mod, lw)
+```
+
+
+## Local measures
+
+Building on insights from the weaknesses of global measures, local indicators of spatial association began to appear in the first half of the 1990s [@anselin:95; @getis+ord:92; @getis+ord:96]. In addition, the Moran plot was introduced, plotting the values of the variable of interest against their spatially lagged values, typically using row-standardised weights to make the axes more directly comparable [@anselin:96]. The `moran.plot()` function also returns an influence measures object used to label observations exerting more than propotional influence on the slope of the line representing global Moran's $I$. We can see that there are many spatial entities exerting such influence. These pairs of observed and lagged observed values make up in aggregate the global measure, but can also be explored in detail. The quadrants of the Moran plot also show low-low pairs in the lower left quadrant, high-high in the upper right quadrant, and fewer low-high and high-low pairs in the upper left and lower right quadrants. 
+
+
+```{r moranplot}
+z |> moran.plot(listw=lw_q_W, labels=pol_pres15$TERYT, cex=1, pch=".", xlab="I round turnout", ylab="lagged turnout") -> infl_W
+```
+If we extract the hat value influence measure from the returned object, the figure suggests that some edge entities exert more than proportional influence (perhaps because of row standardisation), as do entities in or near larger urban areas.
+
+```{r moranhat}
+pol_pres15$hat_value <- infl_W$hat
+library(tmap)
+tm_shape(pol_pres15) + tm_fill("hat_value")
+```
+Bivand and Wong [-@Bivand2018] discuss issues impacting the use of local indicators, such as local Moran's $I$ and local Getis-Ord $G$. Some issues affect the calculation of the local indicators, others inference from their values. Because $n$ statistics may be being calculated from the same number of observations, there are multiple comparison problems that need to be addressed. Although the apparent detection of hotspots from values of local indicators has been quite widely adopted, it remains fraught with difficulty because adjustment of the inferential basis to accommodate multiple comparisons is not often chosen, and as in the global case, mis-specification also remains a source of confusion. Further, interpreting local spatial autocorrelation in the presence of global spatial autocorrelation is challenging [@ord+getis:01; @tiefelsdorf:02; @bivandetal:09]. The `mlvar=` and `adjust.x=` arguments to `localmoran()` are discussed in Bivand and Wong [-@Bivand2018], and permit matching with other implementations. The `p.adjust.method=` argument uses an untested speculation that adjustment should only take into account the cardinality of the neighbour set of each observation when adjusting for multiple comparisons; using `stats::p.adjust()` is preferable.
+
+Taking `"two.sided"` p-values because these local indicators when summed and divided by the sum of the spatial weights, and thus positive and negative local spatial autocorrelation may be present, we obtain:
+
+```{r}
+z |> 
+    localmoran(listw=lw_q_W, alternative="two.sided") -> locm
+```
+```{r}
+all.equal(sum(locm[,1])/Szero(lw_q_W), unname(moran.test(z, lw_q_W)$estimate[1]))
+```
+Using `stats::p.adjust()` to adjust for multiple comparisons, we see that 
+almost 29\% of the local measures have p-values < 0.05 if no adjustment is applied, but only 12\% using Bonferroni adjustment, with two other choices also shown:
+
+```{r}
+pva <- \(pv) cbind("none"=pv, "bonferroni"=p.adjust(pv, "bonferroni"), "fdr"=p.adjust(pv, "fdr"), "BY"=p.adjust(pv, "BY"))
+locm |> 
+    subset(select="Pr(z != 0)", drop=TRUE) |> 
+    pva() -> pvsp
+f <- \(x) sum(x < 0.05)
+apply(pvsp, 2, f)
+```
+
+In the global measure case, bootstrap permutations could be used as an alternative to analytical methods for possible inference. In the local case, conditional permutation may be used, retaining the value at observation $i$ and randomly sampling from the remaining $n-1$ values to find randomised values at neighbours, and is provided as `localmoran_perm()`, which will use multiple nodes to sample in parallel if provided, and permits the setting of a seed for the random number generator across the compute nodes:
+
+```{r}
+library(parallel)
+set.coresOption(ifelse(detectCores() == 1, 1, detectCores()-1L))
+system.time(z |> 
+        localmoran_perm(listw=lw_q_W, nsim=499, alternative="two.sided", iseed=1) -> locm_p)
+```
+The outcome is that almost 32\% of observations have two sided p-values < 0.05 without multiple comparison adjustment, and under 3\% with Bonferroni adjustment.
+
+```{r}
+locm_p |> 
+    subset(select="Pr(z != 0)", drop=TRUE) |> 
+    pva() -> pvsp
+apply(pvsp, 2, f)
+```
+We can see what is happening by tabulating counts of the standard deviate of local Moran's $I$, where the two-sided $\alpha=0.05$ bounds would be $0.025$ and $0.975$, but Bonferroni adjustment is close to $0.00001$ and $0.99999$. Without adjustment, almost 800 observations are significant, with Bonferroni adjustment, only 68 in the conditional permutation case:
+
+```{r}
+brks <- qnorm(c(0, 0.00001, 0.0001, 0.001, 0.01, 0.025, 0.5, 0.975, 0.99, 0.999, 0.9999, 0.99999, 1))
+(locm_p |> 
+        subset(select=Z.Ii, drop=TRUE) |> 
+        cut(brks) |> 
+        table()-> tab)
+```
+
+
+```{r}
+sum(tab[c(1:5, 8:12)])
+```
+
+
+```{r}
+sum(tab[c(1, 12)])
+```
+
+
+
+```{r}
+z |> 
+    localmoran(listw=lw_q_W, conditional=TRUE, alternative="two.sided") -> locm_c
+```
+
+
+```{r}
+locm_c |> 
+    subset(select="Pr(z != 0)", drop=TRUE) |> 
+    pva() -> pvsp
+apply(pvsp, 2, f)
+```
+
+```{r localmoranZ}
+pol_pres15$locm_Z <- locm[, "Z.Ii"]
+pol_pres15$locm_c_Z <- locm_c[, "Z.Ii"]
+pol_pres15$locm_p_Z <- locm_p[, "Z.Ii"]
+tm_shape(pol_pres15) + tm_fill(c("locm_Z", "locm_c_Z", "locm_p_Z"), breaks=brks, midpoint=0, title="Standard deviates of\nLocal Moran's I") + tm_facets(free.scales=FALSE, ncol=2) + tm_layout(panel.labels=c("Analytical total", "Analytical conditional", "Conditional permutation"))
+```
+The figure shows that conditional permutation scales back the proportion of standard deviate values taking extreme values, especially positive values. As we will see below, the analytical standard deviates of local Moran's $I$ should probably not be used if alternatives are available.
+
+In presenting local Moran's $I$, use is often made of "hotspot" maps. Because $I_i$ takes high values both for strong positive autocorrelation of low and high values of the input variable, it is hard to show where "clusters" of similar neighbours with low or high values of the input variable occur. The quadrants of the Moran plot are used, by creating a categorical quadrant variable interacting the input variable and its spatial lag split at their means. The quadrant categories are then set to NA if, for the chosen standard deviate and adjustment, $I_i$ would be considered insignificant. Here, for the conditional permutation standard deviates, Bonferroni adjusted, 14 observations belong to "Low-Low clusters", and 54 to "High-High clusters":
+
+```{r}
+quadr <- interaction(cut(infl_W$x, c(-Inf, mean(infl_W$x), Inf), labels=c("Low X", "High X")), cut(infl_W$wx, c(-Inf, mean(infl_W$wx), Inf), labels=c("Low WX", "High WX")), sep=" : ")
+a <- table(quadr)
+pol_pres15$hs_an_q <- quadr
+is.na(pol_pres15$hs_an_q) <- !(pol_pres15$locm_Z < brks[6] | pol_pres15$locm_Z > brks[8])
+b <- table(pol_pres15$hs_an_q)
+pol_pres15$hs_cp_q <- quadr
+is.na(pol_pres15$hs_cp_q) <- !(pol_pres15$locm_p_Z < brks[2] | pol_pres15$locm_p_Z > brks[12])
+c <- table(pol_pres15$hs_cp_q)
+pol_pres15$hs_ac_q <- quadr
+is.na(pol_pres15$hs_ac_q) <- !(pol_pres15$locm_c_Z < brks[2] | pol_pres15$locm_c_Z > brks[12])
+d <- table(pol_pres15$hs_ac_q)
+t(rbind("Moran plot quadrants"=a, "Unadjusted analytical total"=b, "Bonferroni analytical cond."=d, "Bonferroni cond. perm."=c))
+```
+
+
+
+```{r Iihotspots}
+tm_shape(pol_pres15) + tm_fill(c("hs_an_q", "hs_ac_q", "hs_cp_q"), colorNA="grey95", textNA="Not significant", title="Turnout hotspot status\nLocal Moran's I") + tm_facets(free.scales=FALSE, ncol=2) + tm_layout(panel.labels=c("Unadjusted analytical total", "Bonferroni analytical cond.", "Cond. perm. with Bonferroni"))
+```
+The figure shows the impact of using analytical or conditional permutation standard deviates, and no or Bonferroni adjustment, reducing the counts of observations in "Low-Low clusters" from 370 to 14, and "High-High clusters" from 342 to 54; the "High-High clusters" are metropolitan areas.
+
+The local Getis-Ord $G$ measure is reported as a standard deviate, and may also take the $G^*$ form where self-neighbours are inserted into the neighbour object using `include.self()`. The observed and expected values of local $G$ with their analytical variances may also be returned if `return_internals=TRUE`. 
+
+```{r}
+system.time(z |> 
+        localG(lw_q_W) -> locG)
+```
+
+
+```{r}
+system.time(z |> 
+        localG_perm(lw_q_W, nsim=499, iseed=1) -> locG_p)
+```
+Once again we face the problem of multiple comparisons, with the count of areal unit p-values < 0.05 being reduced by an order of magnitude when employing Bonferroni correction:
+
+```{r}
+locG |> 
+    c() |> 
+    abs() |> 
+    pnorm(lower.tail = FALSE) |> 
+    (\(x) x*2)() |> 
+    pva() -> pvsp
+apply(pvsp, 2, f)
+```
+
+
+
+```{r localZvalues}
+library(ggplot2)
+p1 <- ggplot(data.frame(Zi=locm_c[,4], Zi_perm=locm_p[,4])) + geom_point(aes(x=Zi, y=Zi_perm), alpha=0.2) + xlab("Analytical conditional") + ylab("Permutation conditional") + coord_fixed() + ggtitle("Local Moran's I")
+p2 <- ggplot(data.frame(Zi=c(locG), Zi_perm=c(locG_p))) + geom_point(aes(x=Zi, y=Zi_perm), alpha=0.2) + xlab("Analytical conditional") + ylab("Permutation conditional") + coord_fixed() + ggtitle("Local G")
+gridExtra::grid.arrange(p1, p2, nrow=1)
+```
+
+The figure shows that, keeping fixed aspect in both panels, conditional permutation changes the range and distribution of the standard deviate values for $I_i$, but that for $G_i$, the two sets of standard deviates are equivalent.
+
+```{r}
+pol_pres15$locG_Z <- c(locG)
+pol_pres15$hs_G <- cut(c(locG), c(-Inf, brks[2], brks[12], Inf), labels=c("Low", "Not significant", "High"))
+table(pol_pres15$hs_G)
+```
+
+
+```{r localG}
+m1 <- tm_shape(pol_pres15) + tm_fill(c("locG_Z"), midpoint=0, title="Standard\ndeviate")
+m2 <- tm_shape(pol_pres15) + tm_fill(c("hs_G"), title="Bonferroni\nhotspot status")
+tmap_arrange(m1, m2, nrow=1)
+```
+
+As can be seen, we do not need to contrast the two estimation methods, and showing the mapped standard deviate is as informative as the "hotspot" status for the chosen adjustment. In the case of $G_i$, the values taken by the measure reflect the values of the input variable, so a "High cluster" is found for observations with high values of the input variable, here high turnout in metropolitan areas.
+
+
+## ACS data set
+
+```{r}
+system.time(localI_med_inc_cv <- localmoran(df_tracts$med_inc_cv, lw, alternative="greater"))
+```
+
+```{r}
+system.time(localI_med_inc_cv_cond <- localmoran(df_tracts$med_inc_cv, lw, conditional=TRUE, alternative="greater"))
+```
+
+```{r, eval=FALSE}
+library(parallel)
+set.coresOption(detectCores()-1L)
+# [1] 5
+get.mcOption()
+# [1] TRUE
+system.time(localI_med_inc_cv_perm <- localmoran_perm(df_tracts$med_inc_cv, lw, nsim=499, alternative="greater", iseed=1))
+#    user  system elapsed
+# 113.378   4.688  26.053
+#saveRDS(localI_med_inc_cv_perm, file="localI_med_inc_cv_perm.rds")
+```
+```{r}
+ACS_infl <- moran.plot(df_tracts$med_inc_cv, lw, labels=df_tracts$GEOID, cex=1, pch=".", xlab="CV", ylab="lagged CV")
+```
+
+
+```{r}
+quadr <- interaction(cut(ACS_infl$x, c(-Inf, mean(ACS_infl$x), Inf), labels=c("Low X", "High X")), cut(ACS_infl$wx, c(-Inf, mean(ACS_infl$wx), Inf), labels=c("Low WX", "High WX")), sep=" : ")
+(a <- table(quadr))
+```
+
+```{r}
+df_tracts$hs_an_q <- quadr
+is.na(df_tracts$hs_an_q) <- !(localI_med_inc_cv[, 5] < 0.05)
+b <- table(df_tracts$hs_an_q)
+df_tracts$hs_ac_q <- quadr
+is.na(df_tracts$hs_ac_q) <- !(localI_med_inc_cv_cond[, 5] < 0.05)
+c <- table(df_tracts$hs_ac_q)
+df_tracts$hs_acb_q <- quadr
+is.na(df_tracts$hs_acb_q) <- !(localI_med_inc_cv_cond[, 5] < 0.0000227795)
+d <- table(df_tracts$hs_acb_q)
+t(rbind("Moran plot quadrants"=a, "Unadjusted analytical total"=b, "Unadjusted analytical cond."=c, "Bonferroni analytical cond."=d))
+```
+```{r}
+chicago_MA <- read.table("Chicago_MA.txt", colClasses=c("character", "character"))
+chicago_MA_tracts <- !is.na(match(substring(df_tracts$GEOID, 1, 5), chicago_MA$V2))
+```
+
+```{r}
+tm_shape(df_tracts[chicago_MA_tracts,]) + tm_fill(c("hs_an_q", "hs_ac_q", "hs_acb_q"), colorNA="grey95", textNA="Not significant", title="CV hotspot status\nLocal Moran's I") + tm_facets(free.scales=FALSE, ncol=3) + tm_layout(panel.labels=c("Unadjusted total", "Unadjusted conditional", "Bonferroni conditional"))
+```
+
+## New **rgeoda**
+
+Very recently, Geoda has been wrapped for R as **rgeoda** [@rgeoda-package], and will provide very similar functionalities for the exploration of spatial autocorrelation in areal data as **spdep**. The active objects are kept as pointers to a compiled code workspace; using compiled code for all operations (as in Geoda itself) makes **rgeoda** perform fast, but leaves less flexible when modifications or enhancements are desired.
+
+The contiguity neighbours it constructs are the same as those found by `poly2nb()`, as almost are the $I_i$ measures. The difference is as established by @Bivand2018, that `localmoran()` calculates the input variable variance divinding by $n$, but Geoda uses $(n-1)$, as can be reproduced by setting `mlvar=FALSE`:
+
+```{r}
+library(rgeoda)
+system.time(Geoda_w <- queen_weights(pol_pres15))
+summary(Geoda_w)
+system.time(lisa <- local_moran(Geoda_w, pol_pres15["I_turnout"], 
+    cpu_threads=ifelse(parallel::detectCores() == 1, 1, parallel::detectCores()-1L), permutations=499, seed=1))
+all.equal(card(nb_q), lisa_num_nbrs(lisa), check.attributes=FALSE)
+all.equal(lisa_values(lisa), localmoran(pol_pres15$I_turnout, listw=lw_q_W, mlvar=FALSE)[,1], check.attributes=FALSE)
+```
+
+# Background to spatial econometrics
+
+## Antecedents
+
+In the same way that [@fujitaetal:99] begin their study of the
+spatial economy by looking at the antecedents of their subject, it
+is helpful to place spatial econometrics in its temporal and academic
+context. This context is sufficiently different from the contemporary
+setting that it may be hard to grasp the background for many of the
+features of spatial econometrics that came into being during its earlier
+years. Indeed, the ranges of topics that were studied in economics in
+the 1960's and 1970's differ markedly from those in focus today. If we
+can sketch the context within which spatial econometrics was created,
+and its methods developed, we should be able to illuminate choices
+made then which influence our understanding and application of spatial
+econometric methods.
+
+Critics of the practice of spatial econometrics, such as
+[@gibbons+overman:12], appear to overlook these antecedents, and
+consequently judge the potential of the field on a partial, perhaps
+anachronistic, understanding, viewing phenomena with a history in
+ahistorical way. Since we are attempting to provide an introduction to
+applied spatial econometrics, we need to throw light on the original
+motivations and concerns of the first scholars engaged in the field.
+[@anselin:10] indicates clearly and repeatedly [@anselin:88;
+anselin:06; anselin:10a] that we should acknowledge *Spatial
+Econometrics* by [@paelinck+klaassen:79] of the Netherlands Economic
+Institute as our starting point, and so celebrates thirty years of
+spatial econometrics in 2009. This firm confirmation of the importance
+of Jean Paelinck's contributions as scholar and community-builder
+is fully justified. We should then turn to the motivations given in
+[@paelinck+klaassen:79] to indicate which contextual factors were
+of importance at that time, and the breadth of the academic communities
+with which they were in contact.
+
+In a recent short commentary, [@paelinck:13] recalls his
+conviction, expressed in 1967, that "early econometric exercises $\ldots$
+relating only variables posessing the same regional index $\ldots$ were
+inadequate to represent the correct spatial workings of the economy,
+which would then be reflected in the policy outcomes." A year before,
+[@paelinck:12] points to salient isomorphisms linking
+spatial regression models, simultaneous equation models and input-output
+models; these were known of and discussed in the early formative period
+of spatial econometrics. We will return in subsequent chapters to the
+ways in which spatial regression models may be specified, but for now,
+a simple presentation of these isomorphisms as perceived in the early
+period is sufficient:
+
+\[
+{\mathbf y} = {\mathbf A}{\mathbf y} + {\mathbf X}{\mathbf b} + {\mathbf \varepsilon}
+\]
+
+is a spatial regression model where ${\mathbf A}$ is a matrix expressing
+the mutual first order spatial dependencies between regions --- the
+similarity of this form and the Koyck distributed lag model is striking
+[@koyck:54; @klein:58; @griliches:67};
+
+\[
+{\mathbf A}{\mathbf y} + {\mathbf X}{\mathbf b} = {\mathbf \varepsilon}
+\]
+
+is a simultaneous equation model where ${\mathbf A}$ is a matrix expressing the dependencies between the equations; and:
+
+\[
+{\mathbf y} = {\mathbf A}{\mathbf y} + {\mathbf f}
+\]
+
+is an input-output model where ${\mathbf A}$ is a matrix of sectoral 
+input-output coefficients, and ${\mathbf f}$ is final demand.
+
+Input-output models, simultaneous equation models, and the importance of
+policy outcomes were all known intimately at the Netherlands Economic
+Institute at this time, and elsewhere among applied economists. The
+isomporhisms flowed from the known to the unknown, from the stuff of
+contemporary research and policy advice to doubts about the calibration
+of aspatial models, and on to what became termed spatial econometrics. If
+we compare these topics with those described for Regional Science by
+[@boyce:04], we can see the outlines of research priorities at the
+time: including urban and regional models for planning, regional and
+interregional input-output models, transport and location models. During
+the 1960s and 1970s, many of these models were enhanced --- matching needs
+for policy advice --- to cover environmental questions, adding natural
+resources as inputs and pollution to outputs. Paelinck's co-author in a
+key paper in spatial econometrics [@hordijk+paelinck:76], went on
+to work in environmental management and research.
+
+Reading [@paelinck+klaassen:79], we see that the programme
+of research into the space economy undertaken at the Netherlands Economic
+Institute led first to the publication of [@paelinck+nijkamp:75],
+and then to [@klaassenetal:79], published in the same year as
+**Spatial Econometrics**. All three books were published in the
+same series and appear to reflect the core concerns of economists at
+the Institute doing reasearch on regionalised national macro-economic
+models. The direct link to Jan Tinbergen is evident in the account
+of the context of economic research in the Netherlands given by
+[@theil:64]. If we take Paelinck at his word, he and
+his colleagues were aware that an aspatial regionalisation of national
+accounts, of input-output models, or transport models, might prejudice
+policy advice and outcomes through inadequate and inappropriate
+calibration.
+
+[@klaassenetal:79] is mainly concerned with model construction, while
+about a third of [@paelinck+nijkamp:75] is devoted to input-output
+analysis. Both books show sustained concern for economic measurement,
+especially of national accounts data, intersectoral transactions, and many
+other topics. Considerable attention is also paid to the data collection
+units, be they sectors or regions.  The need to attempt to define regions
+that match the underlying economic realities was recognised clearly, and
+a key part of [@paelinck+nijkamp:75] is devoted to regionalisation,
+and the distinction between functional regions and homogeneous regional
+classifications is made. In the motivation for spatial econometric
+models given in [@paelinck+klaassen:79], consumption
+and investment in a region are modelled as depending on income both in
+the region itself and in its contiguous neighbours, termed a "spatial
+income-generating model." It became important to be able to calibrate
+planning models of this kind to provide indications of the possible
+outcomes of alternative policy choices, hence the need for spatial
+econometrics.
+
+Economic planning was widespread in Europe at the time, and was also
+central in the development of Regional Science, in particular input-output
+models; as [@boyce:04] recounts, Walter Isard worked closely with
+Wassily Leontief. Operational and planning motivations for applied
+economics were unquestioned, as economists in the post-war period saw
+their role, beyond educating young economists, as providing rational
+foundations for economic policy. It is worth noting that Jean Paelinck
+participated actively in the Association de Science Régionale De Langue
+Française, becoming president in 1973--1976. The first president of
+the association was François Perroux, who had founded it with Walter
+Isard in 1961 [@baillyetal:12].
+
+Until the 1980s, it was not at all unusual to publish original
+results in other languages than English. French spatial economic
+research, for example [@ponsard:83], while making little impact
+in Anglophone countries, was widely used in teaching and research
+elsewhere [@billot+thisse:92]. They contrast, though, the "word
+wizardry of François Perroux with the rigour of Claude Ponsard"
+[@billot+thisse:92], echoing the views expressed by
+[@dreze:64] with regard to the work of Perroux. Even
+if we accept that "word wizardry" deserves more rigour and recasting
+in normative and empirically testable forms, it is also part of the
+context within which spatial econometrics came into being. A reading of
+[@perroux:50] is worthwhile,
+because it not only gives the reader a vignette of the context in
+the post-war period, but also provides a discussion of economic space,
+as opposed to banal, unreflected space --- mere position --- that has
+largely disappeared from our considerations.
+
+The title of the journal: *Regional and Urban Economics, Operational Methods* , founded by Jean Paelinck in 1971, and which
+was renamed as *Regional Science and Urban Economics* in 1975
+[@boyce:04], points to the perceived importance of
+"operational methods", a version of the term "operational theory
+and method" used in the title of [@paelinck+nijkamp:75]. Spatial
+econometrics does not seem to have come into being as a set of estimation
+techniques as such, as perhaps we might think today, but rather as
+an approach addressing open research questions both in space economy
+and in the enhancement of interregional models to be used in offering
+policy advice.
+
+Were motivations of this kind common during the 1960s and early
+1970s? Not only was the spread of Regional Science extensive and
+firmly established [@boyce:04], but public bodies were concerned
+to regionalise economic measurement and policy advice [@graham+romans:71]. In Britain, *Environment
+and Planning* was started in 1969 with Alan Wilson as founding
+editor and published by Pion; he was assistant director at the
+Centre for Environmental Studies at this time before moving to
+the University of Leeds. In a recently published lecture series,
+[@wilson:12] cites [@paelinck+nijkamp:75] as
+giving principles for contributions from economics to urban and regional
+analysis [@wilson:00].  The papers presented at
+annual Regional Science meetings were published in a series by Pion; the
+first number in the series included contributions by [@granger:69]
+and [@cliff+ord:69].
+
+In a contribution to a panel session at the 2006 annual meeting of
+the American Association of Geographers (co-panelists Luc Anselin
+and Daniel Griffith), Keith Ord pointed to the continued relevance
+of Granger's remarks at the meeting almost fourty years earlier
+[@ord:10]; we will return to these concerns below. As
+noted by [@bivand:08], communities of researchers working
+in and near mathematical and theoretical geography was more integrated
+in the pre-internet and pre-photocopier age than one might expect, with
+duplicated working papers prepared using stencils circulating rapidly
+between collaborating academic centres. Knowledge of the preliminary
+results of other researchers then fed through into rapid innovation
+in an exciting climate for those with access to these meetings and
+working papers.
+
+There was considerable overlap between quantitative geography and
+regional science, so that work like [@cliff+ord:69] is cited by
+[@hordijk:74], and was certainly known at the Netherlands Economic
+Institute several years earlier. Although it has not been possible
+to find out who participated in the August 1968 conference of the
+British and Irish Section of the Regional Science Association at which
+[@cliff+ord:69] was read, it was not unusual for members of other
+sections to be present, and to return home with bundles of duplicated
+papers. Up to the 1990s, presenters at conferences handed out copies of
+their papers, and conference participants posted home parcels of these
+hand-outs, indexed using the conference programme.
+
+Leslie Hepple was among the more thorough scholars working on the
+underpinnings of spatial econometrics prior to the publication of
+[@paelinck+klaassen:79]. His wide-ranging review [@hepple:74]
+is cited by [@bartels+hordijk:77], again demonstrating the close
+links between those working in this field. We will be returning to
+the review paper, and to [@hepple:76], which studies methods of
+estimation for spatial econometrics models in some depth, building on
+and extending [@ord:75].
+
+[@hepple:74], like [@cliff+ord:73], saw no distinction between
+spatial statistics and the antecedents to spatial econometrics. Obviously,
+spatial econometrics was strongly influenced by the research tasks
+undertaken by regional and urban economists and regional scientists. As
+[@griffith+paelinck:07] point out, spatial statistics and
+spatial econometrics continue to share most topics of interests, with each
+also possessing shorter lists of topics that have been of less concern to
+the other. They advocate a "non-standard" spatial econometrics, which
+is inclusive to wider concerns. It seems appropriate in this context to
+mention the somewhat heterodox position taken by [@mcmillen:10],
+who draws attention to the crucial issue of functional form, which he
+argues may well lie behind observed spatial autocorrelation; we will
+return to this in later chapters.
+
+## Implementing methods in econometrics
+
+Having described some of the contextual issues suggesting how specific
+research concerns influenced how spatial econometrics came into being,
+it may now be helpful to turn to broader econometrics. It will become
+clearer that the research concerns of broader econometrics at that time,
+apart from spatial interdependence and interaction, were generally
+similar to those of spatial econometrics. Indeed, econometrics and the
+provision of national economic data for analysis, modelling, and for the
+provision of policy advice were intimately linked, as were mathematical
+economics and econometrics. The place of econometrics within economics, as
+[@sandmo:11] shows, was a matter of some contention
+from the very beginning.
+
+Both [@morgan:90] and [@qin:93]
+conclude their historical accounts of the beginnings of econometrics
+in pessimistic ways. Econometrics had begun by addressing a range of
+research topics, including the expression of economic theories in
+mathematical form, the building of operational econometric models,
+the exploration of testing and estimation techniques, and statistical
+data preparation. "By the 1950s the founding ideal of econometrics, the
+union of mathematical and statistical economics into a truly synthetic
+economics, had collapsed" [@morgan:90]. The flavour of
+[@paelinck+klaassen:79] seems somewhat anachronistic compared to late
+1950s and early 1960s "textbook" econometrics. One might conclude that
+while spatial econometrics was aligned with Haavelmo's probabilistic
+revolution [@qin:93], it retained, like Haavelmo,
+adherence to the founding ideals [@bjerkholt:07;
+hendry+johansen:12].
+
+It appears from the research programme culminating in
+[@paelinck+klaassen:79] that spatial econometrics could be seen as
+"creative juggling in which theory and data came together to find out
+about the real world" [@morgan:90]. [@morgan:90] and
+[@qin:93] indicate that, from the 1950s, the depth of econometrics
+was flattened , with "[D]ata taken less seriously as a source of ideas
+and information for econometric models, and the theory-development role
+of applied econometrics was downgraded to the theory-testing role"
+[@morgan:90]. The history of econometric ideas is
+of assistance in illuminating key components of what has come to be the
+practice of spatial econometrics:
+
+> With Haavelmo, the profession seemed to have arrived at a consensus:
+a statistical model of plural economic causes and errors in the
+relations. But in the meantime, the old scientific ideal had also changed,
+from a deterministic to a probabilistic view of the way the world
+worked. This left the explanatory level of Haavelmo's model open to new
+doubts. Was it really based on underlying random behaviour of the economic
+variables (as in contemporary evolutionary biology and quantum mechanics),
+or was it, after all, only a convenient way of formally dealing with
+inference in the non-experimental framework? [@morgan:90].
+
+The study of the history of econometrics has been actively promoted
+by David Hendry. It is desirable to motivate our choice of the term
+"applied spatial econometrics"; to do this we turn to [@hendry:09],
+the introductory chapter in the "Applied Econometrics" volume of the
+Palgrave Handbook of Econometrics. If we can shed light on how "applied
+econometrics" is understood, then we may be able to provide adequate
+underpinnings for what is to follow. This, however, turns out to be hard
+to do, as Hendry challenges simple definitions:
+
+> At the superficial level, "Applied Econometrics" is "any application
+of econometrics, as distinct from theoretical econometrics.  $\ldots$ Some
+applied econometricians would include any applications involving analyses
+of "real economic data" by econometric methods, making "Applied
+econometrics" synonymous with empirical econometrics. However, such
+a view leads to demarcation difficulties from applied economics on the
+one hand, and applied statistics on the other.  $\ldots$ Outsiders might
+have thought that "Applied Econometrics" was just the application of
+econometrics to data, but that is definitely not so $\ldots$ Rather, the
+notion of mutual penetration dominates, but as a one-way street. Economic
+theory comes first, almost mandatorially. Perhaps this just arises from
+a false view of science, namely that theory precedes evidence, $\ldots$
+[@hendry:09].
+
+He butresses his views using the history of econometrics to caricature
+empirical econometric research in the light of his view that applied
+economics has a "false" view of science:
+
+> $\ldots$ cumulative critiques $\ldots$ led to an almost monolithic
+approach to empirical econometric research: first postulate an
+individualistic, intertemporal optimization theory; next derive a
+model therefrom; third, find data with the same names as the theory
+variables; then select a recipe from the econometrics cookbook that
+appropriately blends the model and the data, or if necessary, develop
+another estimator; finally report the newly forged economic law.  $\ldots$
+Instead of progress, we find fashions, cycles and "schools" in research.
+$\ldots$ At about the same time that *a priori* theory-based
+econometrics became dominant, data measurement and quality issues
+were also relegated as a central component of empirical publications
+[@hendry:09].
+
+Hendry's scepticism with regard to the practice of applied econometrics
+finds ample support in the proposal by [@andersonetal:08] that
+econometric results be acknowledged only to the extent that they
+are open for replication. They point out that theoretical results in
+economics (and econometrics) are much easier to check, and that referees
+routinely question formal proofs, because the relevant equations
+are included in journal submissions. Further contributions to the
+discussion on reproducible econometric research results have been made
+by [@koenker+zeileis:09] and [@yalta+yalta:10]. As we will see
+later on, spatial econometrics is in the fortunate position of having
+relatively many open source software implementations.
+
+In order to complete this brief review of the antecedents to spatial
+econometrics, it makes sense to point to descriptions of the
+development of econometric software. Both in a handbook chapter
+[@renfro:09a], and in book form [@renfro:09], we can benefit
+from Charles Renfro's experience and insights. He does admit to
+expressing distinct views, but they are backed both by experience and
+evidence. One concern is that econometric software development has been
+seen less and less as academic achievement, but rather as a practical,
+technical concern only:
+
+> To take an interest in programming and econometric software development
+would seem therefore to be the graveyard of any academic economist’s
+professional ambitions, justifiable only as a minimally diverting hobby,
+spoken of only to trusted colleagues. [@renfro:09]
+
+He is not alone in drawing attention to the view that economics suffers
+from a skewed distribution of attention to the actual components
+of knowledge creation, placing theory firmly in first place, with
+commensurately much less weight given to measurement, data preparation
+and programming. As he says, applied economics researchers would benefit
+from a more even distribution of academic acknowledgement to those who, in
+terms of the division of labour within the discipline, develop software:
+
+> As a software developer, the econometrician who incorporates new
+theoretical econometric results may therefore be faced with the
+often-difficult task of not only evaluating the relevance, hence the
+operational validity of the theoretical solution, but also implementing
+these results in a way that is contextually meaningful. This operationally
+focused econometrician consequently not only needs to understand the
+theoretical advances that are made but also to exercise independent
+judgment in the numerical implementation of new techniques, for in
+fact neither are blueprints provided nor are the building blocks
+prefabricated. [@renfro:09]
+
+Since this division of labour is arguably more uneven in economics than
+in other subjects, it leads to the restriction of research questions that
+applied economists can address to those that match estimation functions
+available in software implementations for which they have licences and
+which they know how to use:
+
+> One of the consequences of this specialization has been to introduce
+an element of user dependence, now grown to a sufficiently great degree
+that for many economists whichever set of econometric operations can be
+performed by their choice of program or programs has for them in effect
+become the universal set. [@renfro:09]
+
+This deplorable situation has arisen over time, and certainly did not
+characterise the research context when spatial econometrics came into
+being. At that time, graduate students simply regarded learning to
+program, often in Fortran, as an essential part of their preparation as
+researchers. This meant that researchers were moch "closer" to their
+tools, and could adapt them to suit their research needs. Nowadays,
+few economists feel confident as programmers despite the fact that
+modern high-level languages such as Matlab, Python, or R are easy to
+learn and very flexible, and many econometric and statistical software
+applications offer scripting languages (such as SAS, Stata, SPSS and
+specifically econometric programs).
+
+> The links between methodological advance and the evolution of spatial
+economic theory are only touched upon in [@anselin:10] --- in
+that sense, his review is concerned with theoretical *spatial
+econometrics* (statistical methods) rather than applied *spatial
+econometrics* (economic models). Over time, applied *spatial
+econometrics* has tended to become synonymous with *regression
+modelling* applied to spatial data where *spatial autocorrelation*
+and spatial *heterogeneity* in particular are present and need to
+be accommodated. Its treatment of spatial effects reflects the growing
+"legitimization of space and geography" [@anselin:10]
+in the quantitative social sciences more generally. But the subfield
+perhaps needs to be more than that if it is to justify its separate
+identity from spatial statistics and fully justify its "econometric"
+label. A close link with mainstream economic theory would seem essential
+in order to provide economic legitimacy to models (systems of equations)
+within which geography and spatial relationships have been, in economic
+terms, rigorously embedded [@fingleton:00]. [@haining:14]
+
+### R's `sessionInfo()`
+
+```{r sI, echo = TRUE}
+sessionInfo()
+```
