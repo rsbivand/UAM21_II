@@ -15,7 +15,7 @@ theme: united
 
 ### IV (15/6) [workshop document](https://rsbivand.github.io/UAM21_II/UAM21_II_210615.html)
 
-Installing packages not yet on your system:
+Installing packages not yet on your system:    
 
 ```
 inst <- match(needed, .packages(all=TRUE))
