@@ -127,6 +127,7 @@ summary(boston_506$median)
 Next, we can subset to the remaining 489 tracts with non-censored house values, and the neighbour object to match. The neighbour object now has one observation with no neighbours.
 
 ```{r}
+boston_506$CHAS <- as.factor(boston_506$CHAS)
 boston_489 <- boston_506[!is.na(boston_506$median),]
 nb_q_489 <- spdep::poly2nb(boston_489)
 lw_q_489 <- spdep::nb2listw(nb_q_489, style="W", zero.policy=TRUE)
