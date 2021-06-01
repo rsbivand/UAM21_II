@@ -32,7 +32,7 @@ needed <- c("sphet", "coda", "spatialreg", "spData", "spdep", "sf")
 
 ### Script
 
-Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210607.zip. Download to suitable location, unzip and use as basis.
+Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210614.zip. Download to suitable location, unzip and use as basis.
 
 
 # Seminar introduction

@@ -286,7 +286,7 @@ div.tocify {
 </div>
 <div id="script" class="section level3">
 <h3>Script</h3>
-<p>Script and data at <a href="https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210607.zip" class="uri">https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210607.zip</a>. Download to suitable location, unzip and use as basis.</p>
+<p>Script and data at <a href="https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210608.zip" class="uri">https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210608.zip</a>. Download to suitable location, unzip and use as basis.</p>
 </div>
 <div id="seminar-introduction" class="section level1">
 <h1>Seminar introduction</h1>
@@ -562,7 +562,7 @@ nc_nb_subset$nc</code></pre>
 <pre class="r"><code>lw &lt;- nb2listw(nb_subset, style=&quot;W&quot;)</code></pre>
 <pre class="r"><code>system.time(mt_med_inc_cv &lt;- moran.test(df_tracts$med_inc_cv, lw, alternative=&quot;two.sided&quot;))</code></pre>
 <pre><code>##    user  system elapsed 
-##   2.849   0.001   2.878</code></pre>
+##   2.559   0.001   2.585</code></pre>
 <pre class="r"><code>mt_med_inc_cv</code></pre>
 <pre><code>## 
 ##  Moran I test under randomisation
@@ -647,7 +647,7 @@ set.coresOption(ifelse(detectCores() == 1, 1, detectCores()-1L))</code></pre>
 <pre class="r"><code>system.time(z |&gt; 
         localmoran_perm(listw=lw_q_W, nsim=499, alternative=&quot;two.sided&quot;, iseed=1) -&gt; locm_p)</code></pre>
 <pre><code>##    user  system elapsed 
-##   0.681   0.379   0.285</code></pre>
+##   0.698   0.379   0.283</code></pre>
 <p>The outcome is that almost 32% of observations have two sided p-values &lt; 0.05 without multiple comparison adjustment, and under 3% with Bonferroni adjustment.</p>
 <pre class="r"><code>locm_p |&gt; 
     subset(select=&quot;Pr(z != 0)&quot;, drop=TRUE) |&gt; 
@@ -718,7 +718,7 @@ t(rbind(&quot;Moran plot quadrants&quot;=a, &quot;Unadjusted analytical total&qu
 <pre class="r"><code>system.time(z |&gt; 
         localG_perm(lw_q_W, nsim=499, iseed=1) -&gt; locG_p)</code></pre>
 <pre><code>##    user  system elapsed 
-##   0.372   0.301   0.252</code></pre>
+##   0.129   0.100   0.213</code></pre>
 <p>Once again we face the problem of multiple comparisons, with the count of areal unit p-values &lt; 0.05 being reduced by an order of magnitude when employing Bonferroni correction:</p>
 <pre class="r"><code>locG |&gt; 
     c() |&gt; 
@@ -751,10 +751,10 @@ tmap_arrange(m1, m2, nrow=1)</code></pre>
 <h2>ACS data set</h2>
 <pre class="r"><code>system.time(localI_med_inc_cv &lt;- localmoran(df_tracts$med_inc_cv, lw, alternative=&quot;greater&quot;))</code></pre>
 <pre><code>##    user  system elapsed 
-##   1.614   0.002   1.634</code></pre>
+##   1.442   0.000   1.445</code></pre>
 <pre class="r"><code>system.time(localI_med_inc_cv_cond &lt;- localmoran(df_tracts$med_inc_cv, lw, conditional=TRUE, alternative=&quot;greater&quot;))</code></pre>
 <pre><code>##    user  system elapsed 
-##   1.660   0.000   1.678</code></pre>
+##   1.432   0.000   1.436</code></pre>
 <pre class="r"><code>library(parallel)
 set.coresOption(detectCores()-1L)
 # [1] 5
@@ -810,7 +810,7 @@ chicago_MA_tracts &lt;- !is.na(match(substring(df_tracts$GEOID, 1, 5), chicago_M
 <pre class="r"><code>system.time(Geoda_w &lt;- queen_weights(pol_pres15))</code></pre>
 <pre><code>## here</code></pre>
 <pre><code>##    user  system elapsed 
-##   0.071   0.000   0.072</code></pre>
+##   0.069   0.000   0.069</code></pre>
 <pre class="r"><code>summary(Geoda_w)</code></pre>
 <pre><code>##                      name               value
 ## 1 number of observations:                2495
@@ -824,7 +824,7 @@ chicago_MA_tracts &lt;- !is.na(match(substring(df_tracts$GEOID, 1, 5), chicago_M
 <pre class="r"><code>system.time(lisa &lt;- local_moran(Geoda_w, pol_pres15[&quot;I_turnout&quot;], 
     cpu_threads=ifelse(parallel::detectCores() == 1, 1, parallel::detectCores()-1L), permutations=499, seed=1))</code></pre>
 <pre><code>##    user  system elapsed 
-##   0.153   0.003   0.069</code></pre>
+##   0.158   0.002   0.067</code></pre>
 <pre class="r"><code>all.equal(card(nb_q), lisa_num_nbrs(lisa), check.attributes=FALSE)</code></pre>
 <pre><code>## [1] TRUE</code></pre>
 <pre class="r"><code>all.equal(lisa_values(lisa), localmoran(pol_pres15$I_turnout, listw=lw_q_W, mlvar=FALSE)[,1], check.attributes=FALSE)</code></pre>

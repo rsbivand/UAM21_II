@@ -32,7 +32,7 @@ needed <- c("rgeoda", "digest", "ggplot2", "tmap", "spdep", "spData", "sp", "sf"
 
 ### Script
 
-Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210607.zip. Download to suitable location, unzip and use as basis.
+Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210608.zip. Download to suitable location, unzip and use as basis.
 
 
 # Seminar introduction
