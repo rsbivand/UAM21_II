@@ -394,6 +394,7 @@ T})^{-1}
 \]</span> where and <span class="math inline">\(W_C\)</span> is a symmetric and strictly positive definite matrix</p>
 <p>More recent books expounding the theoretical bases for modelling with areal data simply point out the similarities in relevant chapters <span class="citation">(<a href="#ref-gaetan+guyon:10" role="doc-biblioref">Gaetan and Guyon 2010</a>; <a href="#ref-vanlieshout:19" role="doc-biblioref">Lieshout 2019</a>)</span>; the interested reader is invited to consult these sources for background information and examples using the functions described below.</p>
 <p>Of course, handling a spatial correlation structure in a generalised least squares model or a (generalised) linear or nonlinear mixed effects model such as those provided in the <strong>nlme</strong> and many other packages does not have to use a graph of neighbours <span class="citation">(<a href="#ref-R:Pinheiro+Bates:2000" role="doc-biblioref">Pinheiro and Bates 2000</a>)</span>. These models are also spatial regression models, using functions of the distance between observations, and fitted variograms to model the spatial autocorrelation present; such models have been held to yield a clearer picture of the underlying processes <span class="citation">(<a href="#ref-wall:04" role="doc-biblioref">Wall 2004</a>)</span>, building on geostatistics. For example, the <strong>glmmTMB</strong> package successfully uses this approach to spatial regression <span class="citation">(<a href="#ref-brookesetal:17" role="doc-biblioref">Brooks et al. 2017</a>)</span>. Here we will only consider spatial regression using spatial weights, chiefly as implemented in the <strong>spatialreg</strong> package recently split out of the <strong>spdep</strong> package which had grown unnecessarily large, covering too many aspects of spatial dependence.</p>
+<p>Recent development: <span class="citation">(<a href="#ref-math9111276" role="doc-biblioref">R. Bivand, Millo, and Piras 2021</a>)</span></p>
 <div id="spatial-regression-with-spatial-weights" class="section level2">
 <h2>Spatial regression with spatial weights</h2>
 <p>Spatial autoregression models using spatial weights matrices were described in some detail using maximum likelihood estimation some time ago <span class="citation">(<a href="#ref-cliff+ord:73" role="doc-biblioref">A. D. Cliff and Ord 1973</a>, <a href="#ref-cliff+ord:81" role="doc-biblioref">1981</a>)</span>. A family of models were elaborated in spatial econometric terms extending earlier work, and in many cases using the simultaneous autoregressive framework and row standardization of spatial weights <span class="citation">(<a href="#ref-a88" role="doc-biblioref">Anselin 1988</a>)</span>. The simultaneous and conditional autoregressive frameworks can be compared, and both can be supplemented using case weights to reflect the relative importance of different observations <span class="citation">(<a href="#ref-WallerGotway:2004" role="doc-biblioref">Waller and Gotway 2004</a>)</span>.</p>
@@ -709,24 +710,24 @@ summary(SEM1_94iv)$CoefTable[&quot;NOX2&quot;,]</code></pre>
 <p>The Spatial Econometrics Library is part of the extensive Matlab code repository at <a href="https://www.spatial-econometrics.com/" class="uri">https://www.spatial-econometrics.com/</a> and documented in LeSage and Pace <span class="citation">(<a href="#ref-lesage+pace:09" role="doc-biblioref">2009</a>)</span>. The Google Summer of Coding project in 2011 by Abhirup Mallik mentored by Virgilio Gómez-Rubio yielded translations of some of the model fitting functions for SEM, SDEM, SLM, SDM, SAC and GNM from the Matlab code. These have now been added to <strong>spatialreg</strong> as <code>spBreg_err()</code>, <code>spBreg_lag()</code> and <code>spBreg_sac()</code> with <code>Durbin=</code> arguments to handle the inclusion of spatially lagged covariates. As yet, heteroskedastic disturbances are not accommodated. The functions return <code>&quot;mcmc&quot;</code> objects as specified in the <strong>coda</strong> package, permitting the use of tools from <strong>coda</strong> for handling model output. The default burnin is 500 draws, followed by default 2000 draws returned, but these values and many others may be set through the <code>control=</code> list argument. Fitting the SDEM model for the output zones takes about an order of magnitude longer than using ML, but there is more work to do subsequently, and this difference scales more in the number of samples than covariates or observations.</p>
 <pre class="r"><code>system.time(SDEM_94B &lt;- spBreg_err(form, data=boston_94, listw=lw_q_94, Durbin=TRUE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   1.763   0.006   1.775</code></pre>
+##   1.750   0.010   1.767</code></pre>
 <pre class="r"><code>system.time(SDEM_489B &lt;- spBreg_err(form, data=boston_489, listw=lw_q_489, Durbin=TRUE, zero.policy=TRUE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   2.495   0.000   2.505</code></pre>
+##   2.467   0.001   2.477</code></pre>
 <p>Most time in the ML case using eigenvalues is taken by log determinant setup and optimization, and by dense matrix asymptotic standard errors if chosen (always chosen with default <code>&quot;eigen&quot;</code> log determinant method):</p>
 <pre class="r"><code>t(errorsarlm(form, data=boston_94, listw=lw_q_94, Durbin=TRUE)$timings[,2])</code></pre>
 <pre><code>##      set_up eigen_set_up eigen_opt coefs eigen_hcov eigen_se
-## [1,]  0.004        0.006     0.008 0.004      0.002    0.001</code></pre>
+## [1,]  0.004        0.004     0.007 0.003      0.002    0.001</code></pre>
 <pre class="r"><code>t(errorsarlm(form, data=boston_489, listw=lw_q_489, Durbin=TRUE, zero.policy=TRUE)$timings[,2])</code></pre>
 <pre><code>##      set_up eigen_set_up eigen_opt coefs eigen_hcov eigen_se
-## [1,]  0.009        0.054     0.026 0.007      0.098    0.198</code></pre>
+## [1,]  0.007        0.052     0.025 0.006      0.096    0.187</code></pre>
 <p>while in the MCMC case, the default use of Spatial Econometric Toolbox gridded log determinants and obviously sampling takes most time:</p>
 <pre class="r"><code>t(attr(SDEM_94B, &quot;timings&quot;)[ , 3])</code></pre>
 <pre><code>##      set_up SE_classic_set_up complete_setup sampling finalise
-## [1,]  0.003             0.264          0.027    1.423    0.056</code></pre>
+## [1,]  0.003              0.25           0.03    1.427    0.056</code></pre>
 <pre class="r"><code>t(attr(SDEM_489B, &quot;timings&quot;)[ , 3])</code></pre>
 <pre><code>##      set_up SE_classic_set_up complete_setup sampling finalise
-## [1,]  0.004             0.421          0.071    1.951    0.058</code></pre>
+## [1,]  0.005             0.414           0.07    1.935    0.053</code></pre>
 <p>However, as we will see shortly, inference from model impacts may need sampling (where the spatially lagged response is included in the model), and in the case of MCMC models, the samples have already been drawn.</p>
 </div>
 <div id="handling-the-log-determinant-term" class="section level2">
@@ -799,9 +800,9 @@ rbind(Impacts=sum_imp_94_SDEM$mat[5,], SE=sum_imp_94_SDEM$semat[5,])</code></pre
 <p>The impacts from the same model fitted by MCMC are very similar:</p>
 <pre class="r"><code>sum_imp_94_SDEM_B &lt;- summary(impacts(SDEM_94B))
 rbind(Impacts=sum_imp_94_SDEM_B$mat[5,], SE=sum_imp_94_SDEM_B$semat[5,])</code></pre>
-<pre><code>##               Direct     Indirect        Total
-## Impacts -0.012586335 -0.017431921 -0.030018256
-## SE       0.002536131  0.005390355  0.006508937</code></pre>
+<pre><code>##               Direct    Indirect        Total
+## Impacts -0.012653812 -0.01740874 -0.030062550
+## SE       0.002485255  0.00575439  0.006774467</code></pre>
 <p>as also are those from the SLX model. In the SLX and SDEM models, the direct impacts are the consequences for the response of changes in air pollution in the same observational entity, and the indirect (local) impacts are the consequences for the response of changes in air pollution in neighbouring observational entities.</p>
 <pre class="r"><code>sum_imp_94_SLX &lt;- summary(impacts(SLX_94))
 rbind(Impacts=sum_imp_94_SLX$mat[5,], SE=sum_imp_94_SLX$semat[5,])</code></pre>
@@ -819,7 +820,7 @@ rbind(Impacts=sum_imp_94_SLX$mat[5,], SE=sum_imp_94_SLX$semat[5,])</code></pre>
 tr_489 &lt;- trW(W)
 str(tr_489)</code></pre>
 <pre><code>##  num [1:30] 0 90.8 29.4 42.1 26.5 ...
-##  - attr(*, &quot;timings&quot;)= Named num [1:2] 0.174 0.179
+##  - attr(*, &quot;timings&quot;)= Named num [1:2] 0.164 0.169
 ##   ..- attr(*, &quot;names&quot;)= chr [1:2] &quot;user.self&quot; &quot;elapsed&quot;
 ##  - attr(*, &quot;type&quot;)= chr &quot;mult&quot;
 ##  - attr(*, &quot;n&quot;)= int 489</code></pre>
@@ -831,7 +832,7 @@ colnames(res) &lt;- c(&quot;Direct&quot;, &quot;Indirect&quot;, &quot;Total&quot
 res</code></pre>
 <pre><code>##               Direct      Indirect        Total
 ## Impacts -0.005930731 -1.014744e-05 -0.005940879
-## SE       0.001041765  9.837521e-05  0.001043450</code></pre>
+## SE       0.001073926  1.013427e-04  0.001082105</code></pre>
 <p>Of more interest is trying to reconstruct the direct and total impacts using dense matrix methods; the direct global impacts are the mean of the diagonal of the dense impacts matrix, and the total global impacts are the sum of all matrix elements divided by the number of observations. The direct impacts agree, but the total impacts differ slightly.</p>
 <pre class="r"><code>coef_SLM_489 &lt;- coef(SLM_489)
 IrW &lt;- Diagonal(489) - coef_SLM_489[1] * W
@@ -1516,7 +1517,7 @@ summary(SLXc)</code></pre>
 <pre class="r"><code>SEM &lt;- spatialreg::errorsarlm(tr_form, data=df_tracts, listw=lw, method=&quot;Matrix&quot;, zero.policy=TRUE)
 apply(SEM$timings, 2, sum)</code></pre>
 <pre><code>## user.self   elapsed 
-##     4.329     4.423</code></pre>
+##     4.424     4.497</code></pre>
 <pre class="r"><code>summary(SEM, Hausman=TRUE, Nagelkerke=TRUE)</code></pre>
 <pre><code>## 
 ## Call:spatialreg::errorsarlm(formula = tr_form, data = df_tracts, listw = lw, 
@@ -1616,7 +1617,7 @@ summary(BSEM)</code></pre>
 <pre class="r"><code>SEMw &lt;- spatialreg::errorsarlm(tr_form, weights=tot_pop, data=df_tracts, listw=lw, method=&quot;Matrix&quot;, zero.policy=TRUE)
 apply(SEMw$timings, 2, sum)</code></pre>
 <pre><code>## user.self   elapsed 
-##     4.485     4.502</code></pre>
+##     4.089     4.101</code></pre>
 <pre class="r"><code>summary(SEMw, Hausman=TRUE, Nagelkerke=TRUE)</code></pre>
 <pre><code>## 
 ## Call:spatialreg::errorsarlm(formula = tr_form, data = df_tracts, listw = lw, 
@@ -1654,7 +1655,7 @@ apply(SEMw$timings, 2, sum)</code></pre>
 <pre class="r"><code>SEMc &lt;- spatialreg::errorsarlm(ctr_form, weights=tot_pop, data=df_tracts, listw=lw, method=&quot;Matrix&quot;, zero.policy=TRUE)
 apply(SEMc$timings, 2, sum)</code></pre>
 <pre><code>## user.self   elapsed 
-##    17.683    18.034</code></pre>
+##    16.977    17.148</code></pre>
 <pre class="r"><code>summary(SEMc, Hausman=TRUE, Nagelkerke=TRUE)</code></pre>
 <pre><code>## 
 ## Call:spatialreg::errorsarlm(formula = ctr_form, data = df_tracts, 
@@ -1732,7 +1733,7 @@ apply(SEMc$timings, 2, sum)</code></pre>
 <pre class="r"><code>SDEM &lt;- spatialreg::errorsarlm(tr_form, data=df_tracts, listw=lw, method=&quot;Matrix&quot;, Durbin=TRUE, zero.policy=TRUE)
 apply(SDEM$timings, 2, sum)</code></pre>
 <pre><code>## user.self   elapsed 
-##     9.175     9.247</code></pre>
+##     8.973     8.997</code></pre>
 <pre class="r"><code>summary(SDEM, Nagelkerke=TRUE)</code></pre>
 <pre><code>## 
 ## Call:spatialreg::errorsarlm(formula = tr_form, data = df_tracts, listw = lw, 
@@ -1812,7 +1813,7 @@ apply(SDEM$timings, 2, sum)</code></pre>
 <pre class="r"><code>SDEMw &lt;- spatialreg::errorsarlm(tr_form, weights=tot_pop, data=df_tracts, listw=lw, method=&quot;Matrix&quot;, Durbin=TRUE, zero.policy=TRUE)
 apply(SDEMw$timings, 2, sum)</code></pre>
 <pre><code>## user.self   elapsed 
-##     8.170     8.206</code></pre>
+##     8.204     8.228</code></pre>
 <pre class="r"><code>summary(SDEMw, Hausman=TRUE, Nagelkerke=TRUE)</code></pre>
 <pre><code>## 
 ## Call:spatialreg::errorsarlm(formula = tr_form, data = df_tracts, listw = lw, 
@@ -1898,7 +1899,7 @@ apply(SDEMw$timings, 2, sum)</code></pre>
 ##     impacts</code></pre>
 <pre class="r"><code>system.time(SEM_GMM &lt;- spreg(tr_form, data=df_tracts, listw=as(lw, &quot;CsparseMatrix&quot;), model=&quot;error&quot;, het=FALSE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   1.834   0.000   1.838</code></pre>
+##   1.902   0.058   1.966</code></pre>
 <pre class="r"><code>summary(SEM_GMM)</code></pre>
 <pre><code>## 
 ##  Generalized stsls
@@ -1926,7 +1927,7 @@ apply(SDEMw$timings, 2, sum)</code></pre>
 <p>with its Durbin variant:</p>
 <pre class="r"><code>system.time(SDEM_GMM &lt;- spreg(tr_form, data=df_tracts, listw=as(lw, &quot;CsparseMatrix&quot;), model=&quot;error&quot;, het=FALSE, Durbin=TRUE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   2.097   0.024   2.126</code></pre>
+##   2.133   0.078   2.216</code></pre>
 <pre class="r"><code>summary(SDEM_GMM)</code></pre>
 <pre><code>## 
 ##  Generalized stsls
@@ -1960,7 +1961,7 @@ apply(SDEMw$timings, 2, sum)</code></pre>
 <p>This also lets us adjust the coefficient standard errors for heterskedasticity:</p>
 <pre class="r"><code>system.time(SEM_GMMh &lt;- spreg(tr_form, data=df_tracts, listw=as(lw, &quot;CsparseMatrix&quot;), model=&quot;error&quot;, het=TRUE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   2.583   0.030   2.621</code></pre>
+##   2.660   0.036   2.703</code></pre>
 <pre class="r"><code>summary(SEM_GMMh)</code></pre>
 <pre><code>## 
 ##  Generalized stsls
@@ -1987,7 +1988,7 @@ apply(SDEMw$timings, 2, sum)</code></pre>
 ## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1</code></pre>
 <pre class="r"><code>system.time(SDEM_GMMh &lt;- spreg(tr_form, data=df_tracts, listw=as(lw, &quot;CsparseMatrix&quot;), model=&quot;error&quot;, het=TRUE, Durbin=TRUE))</code></pre>
 <pre><code>##    user  system elapsed 
-##   2.877   0.027   2.911</code></pre>
+##   3.207   0.095   3.311</code></pre>
 <pre class="r"><code>summary(SDEM_GMMh)</code></pre>
 <pre><code>## 
 ##  Generalized stsls
@@ -2087,6 +2088,9 @@ Bivand, Roger S., Jan Hauke, and Tomasz Kossowski. 2013. <span>“Computing the 
 </div>
 <div id="ref-bivand+piras:15" class="csl-entry">
 Bivand, Roger S., and Gianfranco Piras. 2015. <span>“Comparing Implementations of Estimation Methods for Spatial Econometrics.”</span> <em>Journal of Statistical Software</em> 63 (1): 1–36. <a href="https://doi.org/10.18637/jss.v063.i18">https://doi.org/10.18637/jss.v063.i18</a>.
+</div>
+<div id="ref-math9111276" class="csl-entry">
+Bivand, Roger, Giovanni Millo, and Gianfranco Piras. 2021. <span>“A Review of Software for Spatial Econometrics in <span>R</span>.”</span> <em>Mathematics</em> 9 (11). <a href="https://doi.org/10.3390/math9111276">https://doi.org/10.3390/math9111276</a>.
 </div>
 <div id="ref-brookesetal:17" class="csl-entry">
 Brooks, Mollie E., Kasper Kristensen, Koen J. van Benthem, Arni Magnusson, Casper W. Berg, Anders Nielsen, Hans J. Skaug, Martin Maechler, and Benjamin M. Bolker. 2017. <span>“<span class="nocase">glmmTMB</span> Balances Speed and Flexibility Among Packages for Zero-Inflated Generalized Linear Mixed Modeling.”</span> <em>The R Journal</em> 9 (2): 378–400. <a href="https://journal.r-project.org/archive/2017/RJ-2017-066/index.html">https://journal.r-project.org/archive/2017/RJ-2017-066/index.html</a>.
