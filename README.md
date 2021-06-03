@@ -4,6 +4,6 @@ UAM 2021 Intermediate course: spatial data analysis in socio-economic geography 
 7 June OK 
 8 June OK + added ref
 14 June OK ++  added ref
-15 June
+15 June OK +
 
 
