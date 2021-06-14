@@ -1,0 +1,1762 @@
+---
+title: "Introduction to R (II)"
+author: "Roger Bivand"
+date: "Tuesday 15 June 2021"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+theme: united
+bibliography: uam21.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, paged.print=FALSE)
+```
+
+### Copyright
+
+All the material presented here, to the extent it is original, is available under [CC-BY-SA](https://creativecommons.org/licenses/by-sa/4.0/). 
+
+### Required current contributed CRAN packages:
+
+I am running R 4.1.0, with recent `update.packages()`.
+
+```{r, echo=TRUE}
+needed <- c("coda", "INLABMA", "INLA", "foreach", "sphet", "ggplot2",
+"R2BayesX", "colorspace", "BayesXsrc", "HSAR", "hglm", "hglm.data",
+"sp", "MatrixModels", "lme4", "spmoran", "spatialreg", "spData", "tmap", "sf")
+```
+
+### Script
+
+Script and data at https://github.com/rsbivand/UAM21_II/raw/main/UAM21_II_210615.zip. Download to suitable location, unzip and use as basis.
+
+
+# Seminar introduction
+
+
+### Schedule
+
+| Time | Topic |
+| :--- | :---- |
+|**Monday 7/6**|    |
+|09.00-12.00| How may we integrate spatial data from different sources? How may we aggregate spatial data? Which data structures are helpful in handling spatial data? |
+|13.00-16.00| Observations of spatial data are related to each other either by distance, or by a graph of edges linking observations seen as being neighbours. How may they be constructed? How may we address the issues raised by the probable presence of spatial autocorrelation in the spatial data that we are using? |
+|**Tuesday 8/6**|    |
+|09.00-12.00| How can we measure global spatial autocorrelation? |
+|13.00-16.00| How can we measure local spatial autocorrelation? |
+|**Monday 14/6**|    |
+|09.00-12.00| How may we fit regression models to spatial data in the presence of spatial autocorrelation? Maximum likelihood and spatial filtering, case weights. |
+|13.00-16.00| How should we interpret the coefficients or impacts of spatial regression models? How may we predict from spatial regession models? |
+|**Tuesday 15/6**|    |
+|09.00-12.00| Multi-level models: at which level in the data may we fit spatial processes? |
+|13.00-16.00| Spatial filtering, hierarchical GLM, GAM, etc., spatial epidemiological approaches |
+|**Monday 21/6**|    |
+|09.00-12.00| Presentations/consultations/discussion |
+|13.00-16.00| Presentations/consultations/discussion |
+
+# Spatial filtering
+
+Spatial filtering methods as developed by @griffith03 build on using standard
+linear and generalized linear models supplemented with selected eigenvectors from the
+spatial weights matrix. In @JORS:JORS759, @griffith10 and
+@griffith+paelinck:11, examples were given of how standard and non-standard
+spatial econometric problems could be approached using spatial filtering.
+@tiefelsdorf+griffith:07 proposed that the eigenvectors for inclusion should be
+selected by their ability to reduce residual autocorrelation rather than to increase
+model fit. This approach was implemented by Yongwan Chun and Michael Tiefelsdorf in **spdep** and moved to **spatialreg**, with two steps, first to select eigenvectors taken from
+the spatial weights matrix doubly centred using the hat matrix of the actual
+regression, then using `lm` to fit the model, effectively removing residual
+autocorrelation:
+
+
+## Upper NY data
+
+The New York 8 county data set contains population standardized leukaemia cases, with `Z` as a transformed rate:
+
+```{r, echo=TRUE}
+library(sf)
+NY8 <- st_read(system.file("shapes/NY8_utm18.shp", package="spData"))
+NY8 <- st_buffer(NY8, dist=0)
+```
+
+
+```{r, echo=TRUE}
+library(tmap)
+tm_shape(NY8) + tm_fill("Z", midpoint=0)
+```
+
+Create a neighbour object:
+
+```{r, echo=TRUE}
+NY_nb <- spdep::poly2nb(NY8)
+NY_lwB <- spdep::nb2listw(NY_nb, style="B")
+NY_lwW <- spdep::nb2listw(NY_nb, style="W")
+```
+
+Check how the SAR and CAR models behave, with and without case weights:
+
+```{r, echo=TRUE}
+library(spatialreg)
+gform <- Z ~ PEXPOSURE + PCTAGE65P + PCTOWNHOME
+mod1 <- spautolm(gform, data=NY8, family="CAR", listw=NY_lwB, weights=POP8)
+summary(mod1)
+```
+
+This data set is used Waller and Gotway [-@WallerGotway:2004], and in both editions of ASDAR. It is harder to deploy Poisson models because the cases are not integer counts.
+
+
+```{r, echo=TRUE}
+(SF0 <- SpatialFiltering(gform, data = NY8, nb=NY_nb, style="W"))
+```
+
+```{r, echo=TRUE}
+SF_obj2 <- lm(update(gform, . ~ . + fitted(SF0)), data = NY8)
+summary(SF_obj2)
+```
+
+```{r, echo=TRUE}
+spdep::lm.morantest(SF_obj2, NY_lwW)
+```
+
+```{r, echo=TRUE}
+vecs <- fitted(SF0)
+pvecs <- vecs %*% diag(coefficients(SF_obj2)[5:14])
+colnames(pvecs) <- colnames(vecs)
+```
+
+Typically, the small subset of
+eigenvectors selected mops up spatial autocorrelation in the residual.
+@dray+legendre+peres-neto:06 and @griffith+peres-neto:06 adopt a similar
+approach in a generalized linear model context, implemented in **spdep** by Pedro
+Peres-Neto and moved now to **spatialreg** as `ME` analogous with
+`SpatialFiltering`, but centering the spatial weights matrix on the null model
+hat matrix, and using bootstrap methods in evaluating the the choice of eigenvectors.
+The correlations between the implied cumulated outcomes of these methods are shown in
+Table \ref{tab:cor_RE}. @drayetal12 describe many of the underlying motivations,
+including the view that Moran eigenvector spatial filtering approaches may permit both
+spatial autocorrelation and spatial scale tto be accommodate in a single model; a
+further implementation is given in @adespatial-package.
+
+```{r, echo=TRUE}
+set.seed(22)
+(ME0 <- ME(gform, data = NY8, listw=NY_lwW, alpha=0.15, nsim=99))
+```
+
+```{r, echo=TRUE}
+ME_obj2 <- lm(update(gform, . ~ . + fitted(ME0)), data = NY8)
+summary(ME_obj2)
+```
+
+```{r, echo=TRUE}
+mvecs <- fitted(ME0) %*% diag(coefficients(ME_obj2)[5:7])
+sem_obj2a <- spautolm(gform, NY8, listw=NY_lwW)
+W <- as(NY_lwW, "CsparseMatrix")
+SAR_ssre <- 2*as.vector((sem_obj2a$lambda * W) %*% sem_obj2a$Y - (sem_obj2a$lambda * W) %*% (sem_obj2a$X %*% sem_obj2a$fit$coefficients))
+```
+
+@https://doi.org/10.1111/gean.12156 provide a fresher version of spatial
+filtering implemented in @spmoran-package. This also appears to centre the
+spatial weights matrix on the null model hat matrix, and chooses eigenvectors not to
+reduce residual autocorrelation, but chooses those among the eigenvectors with
+positive eigenvalues that increase model fit most up to a threshold to control
+overfitting. The default approach uses an exponential variogram model to generate the
+weights matrix from planar coordinates. The `meigen` function subsets the full
+set of eigenvectors before the data are seen, then `esf` calls `lm` itself
+while further subsetting the eigenvectors.
+
+```{r, echo=TRUE}
+library(spmoran)
+centroids_utm <- st_centroid(st_geometry(NY8))
+meig <- meigen(st_coordinates(centroids_utm))
+```
+
+```{r, echo=TRUE} 
+y <- model.response(model.frame(gform, NY8))
+X <- model.matrix(update(gform, ~ .), NY8)
+(esf_obj2 <- esf(y, X, meig=meig))
+```
+```{r}
+esf_obj2$r
+```
+
+
+```{r, echo=TRUE}
+r_used_eigs <- row.names(esf_obj2$r)
+used_eigs <- as.integer(substring(r_used_eigs, 3))
+evecs <- meig$sf[, used_eigs] %*% diag(esf_obj2$r[1:length(r_used_eigs),1])
+colnames(evecs) <- r_used_eigs
+```
+
+
+```{r, echo=TRUE}
+SEs <- cbind("ESF"=apply(evecs, 1, sum), "SF"=apply(pvecs, 1, sum), "ME"=apply(mvecs, 1, sum), "SAR"=SAR_ssre)
+NY8_SEs <- cbind(NY8, SEs)
+mat <- cor(SEs)
+colnames(mat) <- rownames(mat) <- c("ESF", "SF", "ME", "SAR")
+mat
+```
+
+
+The correlations between the two estimates of spatially
+structured random effects, three cumulated spatial filtering approaches, and the
+spatially structured term implied by the ML estimates of the spatial
+error model. As can be seen, they are very similar to each other, so the choice of
+approach may be fairly flexible and relate more to the needs of users and their domain usages that to a single body of theory.
+
+```{r}
+tm_shape(NY8_SEs) + tm_fill(c("ESF", "SF", "ME", "SAR"), n=8, palette="BrBG", midpoint=0, title="Spatial effect") + tm_facets(free.scales=FALSE) + tm_borders(lwd=0.5) + tm_layout(panel.labels=c("ESF", "SF", "ME", "SAR"), bg="grey90")
+```
+
+
+## NC SIDS data
+
+```{r, message=FALSE, warning=FALSE}
+nc <- st_read(system.file("shapes/sids.shp", package="spData")[1], quiet=TRUE)
+st_crs(nc) <- "EPSG:4267"
+row.names(nc) <- as.character(nc$FIPSNO)
+nc$ft.SID74 <- sqrt(1000)*(sqrt(nc$SID74/nc$BIR74) + sqrt((nc$SID74+1)/nc$BIR74))
+nc$ft.NWBIR74 <- sqrt(1000)*(sqrt(nc$NWBIR74/nc$BIR74) + sqrt((nc$NWBIR74+1)/nc$BIR74))
+gal_file <- system.file("weights/ncCR85.gal", package="spData")[1]
+ncCR85 <- spdep::read.gal(gal_file, region.id=nc$FIPSNO)
+nc_lw <- spdep::nb2listw(ncCR85, style="B")
+nc_W <- as(nc_lw, "CsparseMatrix")
+```
+
+
+```{r, echo=TRUE}
+E <- nc$BIR74 * sum(nc$SID74)/sum(nc$BIR74)
+set.seed(1001)
+(ME_nc_p <- ME(SID74 ~ ft.NWBIR74, offset=log(E), weights=BIR74, data=nc, family=poisson(link=log), listw=nc_lw, alpha=0.25, nsim=499))
+```
+
+```{r, echo=TRUE}
+ME_obj_nc0 <- glm(SID74 ~ ft.NWBIR74, offset=log(E), weights=BIR74, data=nc, family=poisson(link=log))
+summary(ME_obj_nc0)
+```
+
+```{r, echo=TRUE}
+ME_obj_nc <- glm(update(SID74 ~ ft.NWBIR74, . ~ . + fitted(ME_nc_p)), offset=log(E), weights=BIR74, data=nc, family=poisson(link=log))
+summary(ME_obj_nc)
+```
+
+```{r}
+anova(ME_obj_nc0, ME_obj_nc, test="Chisq")
+```
+
+
+# Markov random field and multilevel models with spatial weights
+
+## Boston data set
+
+
+```{r}
+boston_506 <- st_read(system.file("shapes/boston_tracts.shp", package="spData")[1])
+```
+```{r}
+nb_q <- spdep::poly2nb(boston_506)
+lw_q <- spdep::nb2listw(nb_q, style="W")
+```
+
+```{r}
+boston_506$CHAS <- as.factor(boston_506$CHAS)
+boston_489 <- boston_506[!is.na(boston_506$median),]
+nb_q_489 <- spdep::poly2nb(boston_489)
+lw_q_489 <- spdep::nb2listw(nb_q_489, style="W", zero.policy=TRUE)
+```
+
+```{r}
+agg_96 <- list(as.character(boston_506$NOX_ID))
+boston_96 <- aggregate(boston_506[, "NOX_ID"], by=agg_96, unique)
+nb_q_96 <- spdep::poly2nb(boston_96)
+lw_q_96 <- spdep::nb2listw(nb_q_96)
+boston_96$NOX <- aggregate(boston_506$NOX, agg_96, mean)$x
+boston_96$CHAS <- aggregate(as.integer(boston_506$CHAS)-1, agg_96, max)$x
+```
+
+```{r}
+nms <- names(boston_506)
+ccounts <- 23:31
+for (nm in nms[c(22, ccounts, 36)]) {
+  boston_96[[nm]] <- aggregate(boston_506[[nm]], agg_96, sum)$x
+}
+br2 <- c(3.50,  6.25,  8.75, 12.50, 17.50, 22.50, 30.00, 42.50, 60.00)*1000
+counts <- as.data.frame(boston_96)[, nms[ccounts]]
+f <- function(x) matrixStats::weightedMedian(x=br2, w=x, interpolate=TRUE)
+boston_96$median <- apply(counts, 1, f)
+is.na(boston_96$median) <- boston_96$median > 50000
+summary(boston_96$median)
+```
+
+```{r, echo=FALSE}
+POP <- boston_506$POP
+f <- function(x) matrixStats::weightedMean(x[,1], x[,2])
+for (nm in nms[c(9:11, 14:19, 21, 33)]) {
+  s0 <- split(data.frame(boston_506[[nm]], POP), agg_96)
+  boston_96[[nm]] <- sapply(s0, f)
+}
+```
+```{r}
+boston_94 <- boston_96[!is.na(boston_96$median),]
+nb_q_94 <- spdep::subset.nb(nb_q_96, !is.na(boston_96$median))
+lw_q_94 <- spdep::nb2listw(nb_q_94, style="W")
+```
+
+
+There is a large literature in spatial epidemiology using CAR and ICAR models in spatially structured random effects. These extend to multilevel models, in which the spatially structured random effects may apply at different levels of the model [@bivandetal17a]. In order to try out some of the variants, we need to remove the no-neighbour observations from the tract level, and from the model output zone aggregated level, in two steps as reducing the tract level induces a no-neighbour outcome at the model output zone level.
+
+```{r}
+boston_94a <- aggregate(boston_489[,"NOX_ID"], list(boston_489$NOX_ID), unique)
+nb_q_94a <- spdep::poly2nb(boston_94a)
+NOX_ID_no_neighs <- boston_94a$NOX_ID[which(spdep::card(nb_q_94a) == 0)]
+boston_487 <- boston_489[is.na(match(boston_489$NOX_ID, NOX_ID_no_neighs)),]
+boston_93 <- aggregate(boston_487[, "NOX_ID"], list(ids = boston_487$NOX_ID), unique)
+row.names(boston_93) <- as.character(boston_93$NOX_ID)
+nb_q_93 <- spdep::poly2nb(boston_93, row.names=unique(as.character(boston_93$NOX_ID)))
+```
+The **lme4** package lets us add an IID unstructured random effect at the model output zone level:
+
+```{r}
+form <- formula(log(median) ~ CRIM + ZN + INDUS + CHAS + I((NOX*10)^2) + I(RM^2) + 
+                  AGE + log(DIS) + log(RAD) + TAX + PTRATIO + I(BB/100) + 
+                  log(I(LSTAT/100)))
+```
+
+The ZN, INDUS, NOX, RAD, TAX and PTRATIO variables show effectively no variability within the TASSIM zones, so in a multilevel model the random effect may absorb their influence. 
+
+
+```{r}
+library(lme4)
+MLM <- lmer(update(form, . ~ . + (1 | NOX_ID)), data=boston_487, REML=FALSE)
+```
+copying the random effect into the `"sf"` object for mapping below.
+
+```{r}
+boston_93$MLM_re <- ranef(MLM)[[1]][,1]
+```
+Two packages, **hglm** and **HSAR**, offer SAR upper level spatially structured random effects, and require the specification of a sparse matrix mapping the upper level enities onto lower level entities, and sparse binary weights matrices:
+
+```{r}
+library(Matrix)
+suppressMessages(library(MatrixModels))
+Delta <- as(model.Matrix(~ -1 + as.factor(NOX_ID), data=boston_487, sparse=TRUE),
+            "dgCMatrix")
+M <- as(spdep::nb2listw(nb_q_93, style="B"), "CsparseMatrix")
+```
+The extension of **hglm** to sparse spatial setting extended its facilities [@alam-ronnegard-shen:2015], and also permits the modelling of discrete responses. First we fit an IID random effect:
+
+```{r}
+suppressPackageStartupMessages(library(hglm))
+y_hglm <- log(boston_487$median)
+X_hglm <- model.matrix(lm(form, data=boston_487))
+suppressWarnings(HGLM_iid <- hglm(y=y_hglm, X=X_hglm, Z=Delta))
+```
+followed by a SAR model at the upper level (corresponding to a spatial error (SEM) model), which reports the spatially structured random effect without fully converging, so coefficient standard errors are not available:
+
+```{r}
+suppressWarnings(HGLM_sar <- hglm(y=y_hglm, X=X_hglm, Z=Delta, rand.family=SAR(D=M)))
+boston_93$HGLM_re <- unname(HGLM_iid$ranef)
+boston_93$HGLM_ss <- HGLM_sar$ranef[,1]
+```
+The **HSAR** package is restricted to the Gaussian response case, and fits an upper level SEM using MCMC; if `W=` is a lower level weights matrix, it will also fit a lower level SLM [@dong+harris:15; @dongetal15]:
+
+```{r}
+library(HSAR)
+suppressWarnings(HSAR <- hsar(form, data=boston_487, W=NULL, M=M, Delta=Delta, 
+                              burnin=500, Nsim=2500, thinning=1))
+boston_93$HSAR_ss <- HSAR$Mus[1,]
+```
+The **R2BayesX** package provides flexible support for structured additive regression models, including spatial multilevel models. The models include an IID unstructured random effect at the upper level using the `"re"` specification [@umlaufetal:15]; we choose the `"MCMC"`method:
+
+```{r}
+suppressPackageStartupMessages(library(R2BayesX))
+BX_iid <- bayesx(update(form, . ~ . + sx(NOX_ID, bs="re")), family="gaussian",
+data=boston_487, method="MCMC", iterations=12000, burnin=2000, step=2, seed=123)
+boston_93$BX_re <- BX_iid$effects["sx(NOX_ID):re"][[1]]$Mean
+```
+and the `"mrf"` (Markov random field) spatially structured random effect specification based on a graph derived from converting a suitable `"nb"` object for the upper level. The `"region.id"` attribute of the `"nb"` object needs to contain values corresponding the the indexing variable.
+
+```{r}
+RBX_gra <- nb2gra(nb_q_93)
+BX_mrf <- bayesx(update(form, . ~ . + sx(NOX_ID, bs="mrf", map=RBX_gra)), 
+                 family="gaussian", data=boston_487, method="MCMC", 
+                 iterations=12000, burnin=2000,step=2, seed=123)
+boston_93$BX_ss <- BX_mrf$effects["sx(NOX_ID):mrf"][[1]]$Mean
+```
+In a very similar way, `mgcv::gam()` can take an `"mrf"` term using a suitable `"nb"` object for the upper level. In this case the `"nb"` object needs to have the contents of the `"region.id"` attribute copied as the names of the neighbour list components, and the indexing variable needs to be a factor [@wood:17] (the `"REML"` method of `bayesx()` gives the same result here):
+
+```{r}
+library(mgcv)
+names(nb_q_93) <- attr(nb_q_93, "region.id")
+boston_487$NOX_ID <- as.factor(boston_487$NOX_ID)
+GAM_MRF <- gam(update(form, . ~ . + s(NOX_ID, bs="mrf", xt=list(nb=nb_q_93))),
+               data=boston_487, method="REML")
+boston_93$GAM_ss <- aggregate(predict(GAM_MRF, type="terms", se=FALSE)[,14],
+                              list(boston_487$NOX_ID), mean)$x
+```
+In the cases of `hglm()`, `bayesx()` and `gam()`, we could also model discrete responses without further major difficulty, and `bayesx()` and `gam()` also facilitate the generalization of functional form fitting for included covariates.
+
+```{r}
+res <- rbind(iid_lmer=summary(MLM)$coefficients[6, 1:2],
+             iid_hglm=summary(HGLM_iid)$FixCoefMat[6, 1:2], 
+             iid_BX=BX_iid$fixed.effects[6, 1:2], 
+             sar_hsar=c(HSAR$Mbetas[1, 6], HSAR$SDbetas[1, 6]),
+             mrf_BX=BX_mrf$fixed.effects[6, 1:2], 
+             mrf_GAM=c(summary(GAM_MRF)$p.coeff[6], summary(GAM_MRF)$se[6]))
+```
+Unfortunately, the coefficient estimates for the air pollution variable for these multilevel models are not helpful. All remain negative, but the inclusion of the model output zone level effects, be they IID or spatially structured, suggest that it is hard to disentangle the influence of the scale of observation from that of covariates observed at that scale.
+
+```{r multi-levelcoefs}
+suppressPackageStartupMessages(library(ggplot2))
+df_res <- as.data.frame(res)
+names(df_res) <- c("mean", "sd")
+limits <- aes(ymax = mean + qnorm(0.975)*sd, ymin=mean + qnorm(0.025)*sd)
+df_res$model <- row.names(df_res)
+p <- ggplot(df_res, aes(y=mean, x=model)) + geom_point() + geom_errorbar(limits) + geom_hline(yintercept = 0, col="#EB811B") + coord_flip()
+p + ggtitle("NOX coefficients and error bars") + theme(plot.background = element_rect(fill = "transparent",colour = NA), legend.background = element_rect(colour = NA, fill = "transparent"))
+```
+This map shows that the model output zone level IID random effects are very similar across the three model fitting functions reported.
+
+```{r multi-levelmaps1}
+library(tmap)
+tm_shape(boston_93) + tm_fill(c("MLM_re", "HGLM_re" , "BX_re"), midpoint=0, title="IID")  + tm_facets(free.scales=FALSE) + tm_borders(lwd=0.3, alpha=0.4) + tm_layout(panel.labels=c("MLM", "HGLM", "BX"))
+```
+The spatially structured SAR and MRF random effects (MRF term in the `gam()` case) are also very similar, with the MRF somewhat less smoothed than the SAR values.
+
+```{r multilevelmaps2, out.width='100%', fig.cap="Spatially structured random effects", fig=TRUE}
+tm_shape(boston_93) + tm_fill(c("HGLM_ss", "HSAR_ss", "BX_ss", "GAM_ss"), midpoint=0, title="SS")  + tm_facets(free.scales=FALSE) + tm_borders(lwd=0.3, alpha=0.4) + tm_layout(panel.labels=c("HGLM SAR", "HSAR SAR", "BX MRF", "GAM MRF"))
+```
+Although there is still a great need for more thorough comparative studies of model fitting functions for spatial regression, there has been much progress over recent years. This is not completed as a proper set of comparisons with this data set -  [@bivandetal17a; @bivand17] contains comparisons for Beijing land parcels and a housing data set for SW Norway.
+
+
+## NC SIDS data
+
+```{r, message=FALSE, warning=FALSE}
+nc <- st_read(system.file("shapes/sids.shp", package="spData")[1], quiet=TRUE)
+st_crs(nc) <- "EPSG:4267"
+row.names(nc) <- as.character(nc$FIPSNO)
+nc$ft.SID74 <- sqrt(1000)*(sqrt(nc$SID74/nc$BIR74) + sqrt((nc$SID74+1)/nc$BIR74))
+nc$ft.NWBIR74 <- sqrt(1000)*(sqrt(nc$NWBIR74/nc$BIR74) + sqrt((nc$NWBIR74+1)/nc$BIR74))
+gal_file <- system.file("weights/ncCR85.gal", package="spData")[1]
+ncCR85 <- spdep::read.gal(gal_file, region.id=nc$FIPSNO)
+nc_lw <- spdep::nb2listw(ncCR85, style="B")
+nc_W <- as(nc_lw, "CsparseMatrix")
+```
+
+
+The approach taken by social scientists including economists, and some others has been to approach this through simultaneous autoregressive approaches, where the response is modelled using fixed covariates, and the residual process is modelled by optimising a log likelihood function. The **spatialreg** package provides `spautolm()` and `errorsarlm()`:
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+m1 <- spautolm(ft.SID74 ~ ft.NWBIR74, weights=BIR74, data=nc, listw=nc_lw, family="SAR")
+```
+
+When we include the covariate, the spatial error coefficient contributes little:
+
+```{r, echo=TRUE}
+summary(m1)
+```
+
+It is unusual to present maps of the spatially structured random effect in cases where the simultaneous autoregressive approach is used, but it is fully possible using components of the returned model object (the vector is doubled for comparison with the CAR version):
+
+```{r, echo=TRUE}
+nc$SAR_ssre <- 2*as.vector((m1$lambda * nc_W) %*% m1$Y - (m1$lambda * nc_W) %*% (m1$X %*% m1$fit$coefficients))
+library(tmap)
+tm_shape(nc) + tm_fill(c("ft.SID74", "SAR_ssre"), midpoint=c(NA, 0))
+```
+
+
+The other maximum likelihood implementation gives the same results, but provides a Hausman test for shifts in the covariate coefficients between the aspatial and spatial estimates [@pace+lesage:08]; there is none:
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+m1a <- errorsarlm(ft.SID74 ~ ft.NWBIR74, weights=BIR74, data=nc, listw=nc_lw)
+summary(m1a, Hausman=TRUE)
+```
+
+It also lets us add `Durbin=` terms, that is spatially lagged covariates:
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+m1b <- errorsarlm(ft.SID74 ~ ft.NWBIR74, weights=BIR74, data=nc, listw=nc_lw, Durbin=TRUE)
+summary(m1b, Hausman=TRUE)
+```
+
+and to present the by-covariate effects taking into account the unlagged (direct) and lagged (indirect) covariates and the sum of the coefficients (total):
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+summary(impacts(m1b))
+```
+
+
+However, our model may suffer from not using a mixed model approach to a count response; the simultaneous autoregressive models are mostly used with Gaussian responses. One possibility is to employ the hierarchical generalized linear model approach from the **hglm** package. First we'll fit an unstructured IID (independent and identically distributed) random effect [@alam-ronnegard-shen:2015]:
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(hglm)
+E <- nc$BIR74 * sum(nc$SID74)/sum(nc$BIR74)
+HGLM_iid <- hglm(fixed=SID74 ~ ft.NWBIR74, random= ~ 1|CRESS_ID, offset=log(E), weights=BIR74,
+                 data=nc, family=poisson(link=log))
+```
+
+The random effects also have their own standard errors, so we can order and display them with error bars in a forest or caterpillar plot:
+
+```{r, echo=TRUE}
+ranef_iid <- unname(summary(HGLM_iid, print.ranef=TRUE)$RandCoefMat)
+metafor::forest(ranef_iid[,1], ranef_iid[,2], subset=order(ranef_iid[,1], decreasing=TRUE), 
+        slab=NA, annotate=FALSE, lty=c("solid","blank"), pch=19, psize=2, cex.lab=1, cex.axis=1)
+```
+
+We can also fit a weighted Poisson simultaneous autoregressive model, and examine the random effects:
+
+```{r, echo=TRUE, results='hide', message=FALSE, cache=TRUE, warning=FALSE}
+HGLM_sar <- hglm(fixed=SID74 ~ ft.NWBIR74, random= ~ 1|CRESS_ID, offset=log(E), weights=BIR74, 
+                 data=nc, family=poisson(link=log), rand.family=SAR(D=nc_W))
+ranef_sar <- unname(summary(HGLM_sar, print.ranef=TRUE)$RandCoefMat)
+metafor::forest(ranef_sar[,1], ranef_sar[,2], subset=order(ranef_sar[,1], decreasing=TRUE), 
+        slab=NA, annotate=FALSE, lty=c("solid","blank"), pch=19, psize=2, cex.lab=1, cex.axis=1)
+```
+
+There is not much difference between the IID and the SAR spatially structured random effects:
+
+```{r, echo=TRUE}
+nc$HGLM_re <- ranef_iid[,1]
+nc$HGLM_ss_SAR <- ranef_sar[,1]
+tm_shape(nc) + tm_fill(c("HGLM_re", "HGLM_ss_SAR"), midpoint=c(0), title="Poisson HGLM RE") +
+  tm_facets(free.scales=FALSE) + tm_layout(panel.labels=c("IID", "SAR SSRE"))
+```
+
+##  Conditional and MRF autoregressive approaches
+
+Most epidemiological applications use conditional autoregressive approaches, where some (like `spautolm()` and the `hglm()` implementations) fit a spatial coefficient, but many fit an intrinsic CAR. First the `spautolm()` and the `hglm()` implementations:
+
+```{r, echo=TRUE}
+m1c <- spautolm(ft.SID74 ~ ft.NWBIR74, weights=BIR74, data=nc, listw=nc_lw, family="CAR")
+summary(m1c)
+```
+
+Again, we can calculate something that represents the spatial patterning of the spatial process (termed "signal" in the documentation of `spatialreg::predict.sarlm`), but it is not scaled in the same way as the `hgml()` random effects (and importantly we do not have standard errors):
+
+```{r, echo=TRUE}
+nc$CAR_ssre <- as.vector((m1c$lambda * nc_W) %*% m1c$Y - 
+                           (m1c$lambda * nc_W) %*% (m1c$X %*% m1c$fit$coefficients))
+tm_shape(nc) + tm_fill(c("SAR_ssre", "CAR_ssre"), midpoint=c(0), title="Gauss ML RE") +
+  tm_facets(free.scales=FALSE) + tm_layout(panel.labels=c("SAR SSRE", "CAR SSRE"))
+```
+
+Fitting the HGLM CAR model is just like the SAR model, and the forest plot of the spatially structured random effect is similar. Recall that `spautolm()` is fitting a Gaussian model, but `hglm()` is fitting a Poisson model, arguably better suited to count data. This means that the scalings of the random effects will vary in scale:
+
+```{r, echo=TRUE, results='hide', message=FALSE, cache=TRUE, warning=FALSE}
+HGLM_car <- hglm(fixed=SID74 ~ ft.NWBIR74, random= ~ 1|CRESS_ID, offset=log(E), weights=BIR74, 
+                 data=nc, family=poisson(link=log), rand.family=CAR(D=nc_W))
+ranef_car <- unname(summary(HGLM_car, print.ranef=TRUE)$RandCoefMat)
+metafor::forest(ranef_car[,1], ranef_car[,2], subset=order(ranef_car[,1], decreasing=TRUE), 
+        slab=NA, annotate=FALSE, lty=c("solid","blank"), pch=19, psize=2, cex.lab=1, cex.axis=1)
+```
+
+```{r, echo=TRUE}
+nc$HGLM_ss_CAR <- ranef_car[,1]
+tm_shape(nc) + tm_fill(c("HGLM_ss_CAR", "HGLM_ss_SAR"), midpoint=c(0), title="Poisson HGLM RE") +
+  tm_facets(free.scales=FALSE) + tm_layout(panel.labels=c("CAR SSRE", "SAR SSRE"))
+```
+
+To use a generalized additive mixed model (`mgcv::gam()` with an `"mrf"` random effect), and some other mixed models, the areal entities need to be grouped (done in the first exercise), and we can try a flexible fit on the covariate:
+
+```{r, echo=TRUE, results='hide', message=FALSE, cache=TRUE, warning=FALSE}
+nc$LM <- as.numeric(interaction(nc$L_id, nc$M_id))
+aggLM <- aggregate(nc[,"LM"], list(nc$LM), head, n=1)
+aggnb <- spdep::poly2nb(aggLM)
+library(mgcv)
+names(aggnb) <- as.character(aggLM$Group.1)
+nc$LM <- as.factor(nc$LM)
+GAM_mrf <- gam(SID74 ~ s(ft.NWBIR74) + s(LM, bs="mrf", xt=list(nb=aggnb)), offset=log(E), weights=BIR74, data=nc, family=poisson(link=log))
+summary(GAM_mrf)
+```
+
+And plot the covariate smooth term:
+
+```{r, echo=TRUE}
+library(mgcv)
+plot(GAM_mrf)
+```
+
+The forest plot is obviously grouped too:
+
+```{r, echo=TRUE}
+GAM_mrf_re <- predict(GAM_mrf, type="terms", se=TRUE)
+metafor::forest(GAM_mrf_re$fit[,2], GAM_mrf_re$se.fit[,2], subset=order(GAM_mrf_re$fit[,1], decreasing=TRUE), 
+        slab=NA, annotate=FALSE, lty=c("solid","blank"), pch=19, psize=2, cex.lab=1, cex.axis=1)
+```
+
+as is the RE map:
+
+```{r, echo=TRUE}
+nc$GAM_mrf_re <- GAM_mrf_re$fit[,2]
+tm_shape(nc) + tm_fill(c("GAM_mrf_re"), midpoint=c(0), title="Poisson GAM MRF RE")
+```
+
+## US Census ACS dataset
+
+```{r}
+df_tracts <- st_read("df_tracts.gpkg")
+```
+
+
+```{r}
+tr_form <- log(med_inc_cv) ~ log1p(vacancy_rate) + log1p(old_rate) + log1p(black_rate) + log1p(hisp_rate) + log1p(group_pop) + log1p(dens)
+```
+
+
+```{r}
+df_tracts$ST <- factor(substring(df_tracts$GEOID, 1, 2))
+library(mgcv)
+GAM_RE <- gam(update(tr_form, . ~ . + s(ST, bs="re")), data=df_tracts)
+summary(GAM_RE)
+```
+
+
+```{r, cache=TRUE}
+states <- aggregate(df_tracts["ST"], list(df_tracts$ST), head, n=1)
+nb_st <- spdep::poly2nb(states, row.names=as.character(states$ST))
+names(nb_st) <- as.character(states$ST)
+GAM_MRF <- gam(update(tr_form, . ~ . + s(ST, bs="mrf", k=49, xt=list(nb=nb_st))), data=df_tracts)
+summary(GAM_MRF)
+```
+
+```{r}
+cat(capture.output(print(anova(GAM_RE, GAM_MRF, test="Chisq")))[c(1, 2, 9:11)], sep="\n")
+```
+
+
+## Beijing leased residential land parcels data set (2003-2009)
+
+The Beijing leased residential land parcels data set has been made available in the **HSAR** package. There are 1117 observed land parcels, grouped into 111 districts. The data are for most of the districts for which parcel price data was available for the 2003-2009 period; some isolated districs were also excluded.
+
+```{r load_data, echo = TRUE}
+library(HSAR)
+data(landprice)
+data(landSPDF)
+```
+
+
+
+
+The parcel data as provided are in two objects, a `data.frame` and a `SpatialPointsDataFrame`, which need to be merged and ordered by district ID (obs relate to the original parcel IDs):
+
+```{r merge_data1, echo = TRUE}
+landprice1 <- st_as_sf(landSPDF)
+landprice1 <- merge(landprice1, landprice, by="obs")
+landprice2 <- landprice1[order(landprice1$district.id.x),]
+```
+
+Categorical variables, such as the year relating to the price, and the district ID, should be specified as `factor` objects, to permit the creation of dummies on-the-fly:
+
+```{r strip_data1, echo = TRUE}
+landprice2$fyear <- factor(landprice2$year + 2003)
+landprice2$f_district.id.x <- factor(landprice2$district.id.x)
+```
+
+Because `formula` objects can include simple functions, such as `log` of variables, we revert pre-computed logs:
+
+```{r strip_data2, echo = TRUE}
+landprice2$price <- exp(landprice2$lnprice)
+landprice2$area <- exp(landprice2$lnarea)
+landprice2$Dcbd <- exp(landprice2$lndcbd)
+landprice2$Dsubway <- exp(landprice2$dsubway)
+landprice2$Dpark <- exp(landprice2$dpark)
+landprice2$Dele <- exp(landprice2$dele)
+```
+
+
+### Parcel-level spatial weights
+
+We use the weights specified in [@dongetal15], an exponential decay function with a distance threshold of 1.5km; they are stored in a sparse `listw` object. We need to set `zero.policy` because seven parcels have no neighbours at this threshold:
+
+```{r W_weights, echo = TRUE}
+dnb1.5 <- spdep::dnearneigh(landprice2, 0, 1500, row.names=row.names(landprice2))
+dists <- spdep::nbdists(dnb1.5, st_coordinates(landprice2))
+edists <- lapply(dists, function(x) exp((-((x/1000)^2))/(1.5^2)))
+ozpo <- spdep::set.ZeroPolicyOption(TRUE)
+ozpo1 <- set.ZeroPolicyOption(TRUE)
+lw <- spdep::nb2listw(dnb1.5, glist=edists, style="W")
+W <- as(lw, "CsparseMatrix")
+trs <- trW(W, m=50)
+```
+
+### Formula objects
+
+For over twenty years, `data.frame` and `formula` objects have defined S and R syntax. Use of update methods allows flexibility and re-use; the `data=` argument points to the object containing the named variables (columns):
+
+```{r form_lm, echo = TRUE}
+form <- log(price) ~ log(area) + log(Dcbd) + log(Dele) + log(Dpark) + log(Dsubway) + 
+  crimerate + popden + fyear
+OLS <- lm(form, data=landprice2)
+```
+
+### Using fitted model objects
+
+There are many standard methods for fitted model objects, especially `print` and `summary` methods, which are not shown here. Let's use Moran's $I$ to test for residual spatial autocorrelation (and/or other mis-specifications):
+
+```{r mI, echo = TRUE}
+spdep::lm.morantest(OLS, lw)
+```
+
+### Same framework with spatial models
+
+It makes sense to use the formula/data framework for functions fitting spatial econometrics models, such as SLX; we need a spatial weights `listw` object, qualified by accepting parcels without neighbours:
+
+```{r SLX, echo = TRUE}
+
+SLX <- lmSLX(form, data=landprice2, listw=lw, zero.policy=TRUE)
+```
+
+### SLX residual autocorrelation
+
+The fitted object still inherits from `lm`, so functions and methods expecting such an object will still work. There is still a lot of spatial autocorrelation in the residuals:
+
+```{r mI_SLX, echo = TRUE}
+class(SLX)
+spdep::lm.morantest(SLX, lw)
+```
+
+### Impacts: local and global
+
+The SLX model has come into focus recently because of its ease of estimation, and because the coefficients may be treated as direct and indirect impacts, with total impacts calculated by linear combination:
+
+```{r imp_SLX, echo = TRUE}
+imps_SLX <- spatialreg::impacts(SLX)
+imps_SLX
+```
+
+### Maximum likelihood --- error model
+
+The spatial error model (SEM) may be estimated by maximum likelihood (case weights may also be used), here using eigenvalues of the spatial weights to compute the Jacobian [@bivandetal13]. The Hausman test [@pace+lesage:08] examines whether the SEM coefficients differ from OLS coefficients:
+
+```{r SEM, echo = TRUE}
+e <- eigenw(lw)
+int <- 1/range(e)
+SEM <- errorsarlm(form, data=landprice2, listw=lw, interval=int, control=list(pre_eig=e), zero.policy=TRUE)
+Hausman.test(SEM)
+```
+
+### GMM estimation of SEM
+
+The **sphet** package [@piras:10] provides a wide range of model fitting options, terming the spatial coefficient on the error $\rho$, rather than $\lambda$, and the other way round for the lag coefficient on the dependent variable:
+
+```{r GMM1, echo = TRUE}
+library(sphet)
+GM_SEM <- spreg(form, data=landprice2, listw=lw, model="error")
+```
+
+### ML Durbin SEM
+
+The spatial Durbin error model (SDEM), like SLX, adds the spatially lagged independent variables on the right hand side, and may be estimated by maximum likelihood:
+
+```{r SDEM, echo = TRUE}
+SDEM <- errorsarlm(form, data=landprice2, listw=lw, etype="emixed",
+ interval=int, control=list(pre_eig=e), zero.policy=TRUE)
+Hausman.test(SDEM)
+```
+
+### SDEM impacts
+
+SDEM impacts, like those for SLX, are calculated by linear combination:
+
+```{r imp_SDEM, echo = TRUE}
+imps_SDEM <- spatialreg::impacts(SDEM)
+imps_SDEM
+```
+
+### Maximum likelihood spatial lag model
+
+The spatial lag model (SAR) is estimated using `lagsarlm` by maximum likelihood. There is also an LM test for residual autocorrelation:
+
+```{r SAR, echo = TRUE}
+SAR <- lagsarlm(form, data=landprice2, listw=lw, type="lag", interval=int, control=list(pre_eig=e), zero.policy=TRUE)
+digits <- max(5, .Options$digits - 3)
+cat("test value: ", format(signif(SAR$LMtest, digits)), ", p-value: ",
+ format.pval((1 - pchisq(SAR$LMtest, 1)), digits), "\n", sep="")
+```
+
+### SAR impacts
+
+The impacts method for SAR (and SDM) fitted model objects uses simple samples from the multivariate distribution of the coefficients and their covariances for inferences, and uses traces of powers of the spatial weights:
+
+```{r imp_SDM, echo = TRUE}
+spatialreg::impacts(SAR, tr=trs)
+```
+
+
+### GMM estimation of SAR
+
+The **sphet** package [@piras:10] provides a number of ways of fitting this model, calling the coefficient $\lambda$:
+
+```{r GMM2, echo = TRUE}
+library(sphet)
+GM_SAR <- spreg(form, data=landprice2, listw=lw, model="lag")
+```
+
+### GMM SAR impacts
+
+
+```{r imp_GM_SAR, echo = TRUE}
+impacts(GM_SAR, tr=trs)
+```
+
+
+### Spatial lag Durbin model
+
+As with the SLX and SDEM models, the lags of the independent variables are made automatically (this needs revisiting for SLX and SDEM to permit different and possibly multiple matrices to be used):
+
+```{r SDM, echo = TRUE}
+SDM <- lagsarlm(form, data=landprice2, listw=lw, type="mixed", interval=int, control=list(pre_eig=e), zero.policy=TRUE)
+digits <- max(5, .Options$digits - 3)
+cat("test value: ", format(signif(SDM$LMtest, digits)), ", p-value: ",
+ format.pval((1 - pchisq(SDM$LMtest, 1)), digits), "\n", sep="")
+```
+
+### Tests between SLX, SDM and SDEM
+
+We can use Likelihood ratio tests between nesting models
+
+```{r LR1, echo = TRUE}
+cat(capture.output(LR.Sarlm(SAR, SDM))[c(7,8,5)], sep="\n")
+cat(capture.output(LR.Sarlm(SEM, SDM))[c(7,8,5)], sep="\n")
+cat(capture.output(LR.Sarlm(SEM, SDEM))[c(7,8,5)], sep="\n")
+```
+
+### Tests between SLX, SDM and SDEM
+
+```{r LR2, echo = TRUE}
+cat(capture.output(LR.Sarlm(SLX, SDM))[c(7,8,5)], sep="\n")
+cat(capture.output(LR.Sarlm(SLX, SDEM))[c(7,8,5)], sep="\n")
+```
+
+
+### SDM impacts
+
+Here we'll take samples to use later:
+
+```{r imp_SDM0, echo = TRUE}
+set.seed(1)
+imps <- spatialreg::impacts(SDM, tr=trs, R=2000)
+imps
+```
+
+### Impacts by simple linear algebra
+
+Let's also explore the impacts of the log(area) variable the manual way; the direct impact is the same, the total differs very slightly:
+
+```{r imp_SDM1, echo = TRUE}
+IrW1 <- spdep::invIrW(lw, rho=coef(SDM)[1])
+n <- nrow(landprice2)
+S_area <- IrW1 %*% ((diag(n) * coef(SDM)[3]) + (coef(SDM)[16] * W))
+sum(S_area)/n
+sum(diag(S_area))/n
+```
+
+### Total impacts by incremented prediction
+
+If we make a prediction (using GSoC 2015 code by Martin Gubri based on [@goulardetal:17]) from the fitted model, increment area, and make a new prediction, the mean difference is the total impact:
+
+```{r imp_SDM2, echo = TRUE}
+newdata <- landprice2
+suppressWarnings(p0 <- predict(SDM, newdata=newdata, listw=lw))
+newdata$area <- exp(log(newdata$area)+1)
+suppressWarnings(p1 <- predict(SDM, newdata=newdata, listw=lw))
+mean(p1-p0)
+```
+
+### MCMC spatial Durbin fitting
+
+Following GSoC 2011, parts of the Spatial Econometrics toolbox were translated into R, with default 2500 draws and 500 omitted as burnin:
+
+```{r BSDM, echo = TRUE, cache=TRUE}
+set.seed(1)
+BSDM <- spBreg_lag(form, data=landprice2, listw=lw, type="Durbin")
+```
+
+### MCMC impacts
+
+As we already have the draws, we do not need to sample again to be able to infer:
+
+```{r imp_BSDM, echo = TRUE}
+impsB <- spatialreg::impacts(BSDM, tr=trs)
+impsB
+```
+
+### Total impact of log(area)
+
+
+
+
+```{r fig2, echo=TRUE, eval=TRUE}
+plot(density(impsB$sres$total[,1]), lty=4, col="orange", main="log(area) total impacts", ylim=c(0, 10))
+lines(density(imps$sres$total[,1]), lty=3, col="red")
+abline(v=imps$res$total[1], lty=3, col="red")
+abline(v=impsB$res$total[1], lty=4, col="orange")
+abline(v=mean(p1-p0), lty=2, col="blue")
+abline(v=imps_SLX$impacts$total[1], lwd=2, col="green")
+curve(dnorm(x, mean=imps_SLX$impacts$total[1], sd=imps_SLX$se$total[1]), col="green", lwd=2, add=TRUE, from=-0.2, to=0.4)
+legend("topleft", legend=c("BSDM", "SDM (tr)", "SDM (pred)", "SLX"), lty=c(4,3,2,1), col=c("orange", "red", "blue", "green"), lwd=c(1,1,1,2), bty="n", cex=0.8)
+```
+
+
+
+
+
+
+Here we show the sampled distributions from the fitted ML model, the MCMC total impacts (red and orange dotted lines), the blue point total impact from prediction difference, and the point estimate and implied distrubution from the SLX model (in green).
+
+
+
+
+### General Nested Model (GNM)
+
+The GNM is a SAC (both lag and error coefficients, aka SARAR) with spatially lagged independent variables. It suffers from the same problems as all SARAR - a tendency for the two coefficients to flip
+
+```{r GNM, echo = TRUE, cache=TRUE}
+GNM <- sacsarlm(form, data=landprice2, listw=lw, type="sacmixed", interval1=int, interval2=int,
+ control=list(pre_eig1=e, pre_eig2=e), zero.policy=TRUE)
+```
+
+### Impacts
+
+SAC and GNS fitted models also need impacts computed:
+
+```{r imp_GNM, echo = TRUE}
+spatialreg::impacts(GNM, tr=trs)
+```
+
+### Tests between GNM, SDM and SDEM
+
+```{r LR3, echo = TRUE}
+cat(capture.output(LR.Sarlm(SDM, GNM))[c(7,8,5)], sep="\n")
+cat(capture.output(LR.Sarlm(SDEM, GNM))[c(7,8,5)], sep="\n")
+```
+
+
+# Bayesian spatial econometrics
+
+
+```{r, echo=TRUE}
+# install INLA 
+# install.packages("INLA", repos="https://inla.r-inla-download.org/R/stable")
+library(INLA)
+library(INLABMA)
+```
+
+### Columbus toy data
+
+```{r, echo=TRUE}
+data(oldcol, package="spdep")
+lw <- spdep::nb2listw(COL.nb, style="W")
+ev <- eigenw(similar.listw(lw))
+W <- spdep::listw2mat(lw)
+sW <- as(lw, "CsparseMatrix")
+tr <- trW(sW)
+m.form <-  CRIME ~ INC + HOVAL
+COL.OLD$LAG_INC <- lag(lw, COL.OLD$INC)
+COL.OLD$LAG_HOVAL <- lag(lw, COL.OLD$HOVAL)
+COL.OLD$idx <- 1:nrow(COL.OLD)
+dm.form <- CRIME ~ INC + HOVAL + LAG_INC + LAG_HOVAL
+```
+
+### Simulation framework
+
+```{r, echo=TRUE, echo=TRUE}
+titer <- 2000L
+nomit <- 1000L
+niter <- titer - nomit
+thin <- 1L
+```
+
+### Check Durbin
+
+```{r, echo=TRUE}
+coefficients(lmSLX(m.form, data=COL.OLD, listw=lw))
+```
+
+```{r, echo=TRUE}
+coefficients(lm(dm.form, data=COL.OLD))
+```
+
+### Try hglm
+
+```{r, echo=TRUE, warnings=FALSE, results='hide', message=FALSE}
+library(hglm)
+suppressWarnings(sem.hglm <- hglm(fixed=m.form, random= ~ 1 | I(as.factor(idx)),
+                data=COL.OLD, rand.family=SAR(D=sW), sparse=TRUE, verbose=FALSE))
+```
+
+### HGLM SEM
+
+```{r, echo=TRUE}
+summary(sem.hglm)
+```
+
+### ML SEM
+
+```{r, echo=TRUE}
+sem.ml <- errorsarlm(m.form, data = COL.OLD, listw=lw, control=list(pre_eig=ev))
+summary(sem.ml)
+```
+
+### SET SEM (griddy Gibbs I)
+
+```{r, echo=TRUE}
+sem.SET0 <- spBreg_err(m.form, data = COL.OLD, listw=lw,
+              control=list(ndraw=titer, nomit=nomit, prior=list(gG_sige=TRUE)))
+```
+
+```{r, echo=TRUE}
+summary(sem.SET0)
+```
+
+
+```{r, echo=TRUE}
+library(coda)
+raftery.diag(sem.SET0, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sem.SET0)
+```
+
+### SET SEM (griddy Gibbs II)
+
+```{r, echo=TRUE}
+sem.SET1 <- spBreg_err(m.form, data = COL.OLD, listw=lw,
+              control=list(ndraw=titer, nomit=nomit, prior=list(gG_sige=FALSE)))
+```
+
+
+```{r, echo=TRUE}
+summary(sem.SET1)
+```
+
+
+```{r, echo=TRUE}
+raftery.diag(sem.SET1, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sem.SET1)
+```
+
+
+### SET SEM (MH)
+
+```{r, echo=TRUE}
+sem.SET2 <- spBreg_err(m.form, data = COL.OLD, listw=lw,
+              control=list(ndraw=titer, nomit=nomit, prior=list(lambdaMH=TRUE)))
+```
+
+```{r, echo=TRUE}
+summary(sem.SET2)
+```
+
+
+```{r, echo=TRUE}
+raftery.diag(sem.SET2, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sem.SET2)
+```
+
+### INLA setup
+
+```{r, echo=TRUE}
+n <- nrow(COL.OLD)
+rho.max <- 1/max(Re(ev))
+rho.min <- 1/min(Re(ev))
+rho <- mean(c(rho.min, rho.max))
+```
+
+### INLA_slm SEM setup
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+zero.variance = list(prec=list(initial = 25, fixed=TRUE))
+args.slm <- list(rho.min = rho.min, rho.max = rho.max, W = sW,
+              X = matrix(0, nrow=n, ncol=0), Q.beta = matrix(1,0,0))
+hyper.slm <- list(prec = list(prior = "loggamma", param = c(0.01, 0.01)),
+              rho = list(initial=rho, prior = "logitbeta", param = c(1,1)))
+```
+
+### INLA_slm SEM
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+system.time(sem.inla_slm <- inla(update(m.form, . ~ . + f(idx, model="slm",
+                  args.slm=args.slm, hyper=hyper.slm)), data = COL.OLD,
+                  family="gaussian", control.family = list(hyper=zero.variance),
+                  control.compute=list(dic=TRUE, cpo=TRUE)))
+```
+
+
+```{r, echo=TRUE}
+print(summary(sem.inla_slm))
+```
+
+
+```{r, echo=TRUE}
+ff<- function(z){z*(rho.max-rho.min)+rho.min}
+semmarg <- inla.tmarginal(ff, sem.inla_slm$marginals.hyperpar[[2]]) 
+c(mean=mean(semmarg[, "x"]), se=sd(semmarg[, "x"]))
+```
+
+
+### SEM coefficients and SEs
+
+```{r, echo=FALSE, results='hide'}
+sem_ml_coefs <- c(t(rbind(summary(sem.ml)$Coef[,1:2], 
+                  lambda=c(sem.ml$lambda, sem.ml$lambda.se), s2=c(sem.ml$s2,
+                  NA))))
+sem_hglm_coefs <- c(t(rbind(summary(sem.hglm)$FixCoefMat[,1:2],
+                    c(sem.hglm$SAR.rho, NA), c(NA,NA))))
+sem_SET0_coefs <- c(t(summary(sem.SET0)$statistics[,1:2]))
+sem_SET1_coefs <- c(t(summary(sem.SET1)$statistics[,1:2]))
+sem_SET2_coefs <- c(t(summary(sem.SET2)$statistics[,1:2]))
+sem_inla_slm_coefs <- c(t(rbind(summary(sem.inla_slm)$fixed[,1:2],
+                  c(mean=mean(semmarg[, "x"]), se=sd(semmarg[, "x"])), c(NA,NA))))
+sem_res <- cbind(sem_ml_coefs, sem_hglm_coefs, sem_SET0_coefs, sem_SET1_coefs, 
+          sem_SET2_coefs, sem_inla_slm_coefs)
+nms <- c(t(cbind(c(rownames(summary(sem.ml)$Coef[,1:2]), "lambda", "s2"), 
+          c(" ", "  ", "   ", "    ", "     "))))
+rownames(sem_res) <- nms
+```
+
+```{r, echo=TRUE}
+sem_res
+```
+
+
+### SDEM ML
+
+```{r, echo=TRUE}
+sdem.ml <- errorsarlm(m.form, data = COL.OLD, listw=lw, Durbin=TRUE, 
+            control=list(pre_eig=ev))
+summary(sdem.ml)
+```
+
+```{r, echo=TRUE}
+sdem.ml_imps <- summary(spatialreg::impacts(sdem.ml), zstats=TRUE, short=TRUE)
+a1 <- expand.grid(colnames(sdem.ml_imps$mat), rownames(sdem.ml_imps$mat))
+imp_nms <- c(t(cbind(paste(as.character(a1$Var1), as.character(a1$Var2), sep="_"), 
+            c(" ", "  ", "   ", "    ", "     ", "      "))))
+print(sdem.ml_imps)
+```
+
+### SDEM SET (griddy Gibbs I)
+
+```{r, echo=TRUE}
+system.time(sdem.SET0 <- spBreg_err(m.form, data = COL.OLD, listw=lw,
+              Durbin=TRUE, control=list(ndraw=titer, nomit=nomit,
+              prior=list(gG_sige=TRUE))))
+```
+
+```{r, echo=TRUE}
+summary(sdem.SET0)
+```
+
+```{r, echo=TRUE}
+sdem.SET0_imps <- summary(spatialreg::impacts(sdem.SET0), zstats=TRUE, short=TRUE)
+print(sdem.SET0_imps)
+```
+
+```{r, echo=TRUE}
+raftery.diag(sdem.SET0, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sdem.SET0)
+```
+
+### SDEM SET (griddy Gibbs II)
+
+```{r, echo=TRUE}
+sdem.SET1 <- spBreg_err(m.form, data = COL.OLD, listw=lw, Durbin=TRUE,
+              control=list(ndraw=titer, nomit=nomit, prior=list(gG_sige=FALSE)))
+```
+
+```{r, echo=TRUE}
+summary(sdem.SET1)
+```
+
+```{r, echo=TRUE}
+sdem.SET1_imps <- summary(spatialreg::impacts(sdem.SET1), zstats=TRUE, short=TRUE)
+print(sdem.SET1_imps)
+```
+
+```{r, echo=TRUE}
+raftery.diag(sdem.SET1, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sdem.SET1)
+```
+
+### SDEM SET (MH)
+
+```{r, echo=TRUE}
+sdem.SET2 <- spBreg_err(m.form, data = COL.OLD, listw=lw, Durbin=TRUE,
+              control=list(ndraw=titer, nomit=nomit, prior=list(lambdaMH=TRUE)))
+```
+
+```{r, echo=TRUE}
+summary(sdem.SET2)
+```
+
+```{r, echo=TRUE}
+sdem.SET2_imps <- summary(spatialreg::impacts(sdem.SET2), zstats=TRUE, short=TRUE)
+print(sdem.SET2_imps)
+```
+
+```{r, echo=TRUE}
+raftery.diag(sdem.SET2, r=0.01)
+```
+
+```{r}
+geweke.diag(sdem.SET2)
+```
+
+### SDEM INLA_slm
+
+```{r, echo=TRUE}
+lc1 <- with(COL.OLD, inla.make.lincomb(INC=+1, LAG_INC=+1))
+names(lc1) <- "TOT_INC"
+lc2 <- with(COL.OLD, inla.make.lincomb(HOVAL=+1, LAG_HOVAL=+1))
+names(lc2) <- "TOT_HOVAL"
+```
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+system.time(sdem.inla_slm <- inla(update(dm.form, . ~ . + f(idx, model="slm",
+                  args.slm=args.slm, hyper=hyper.slm)), data = COL.OLD,
+                  lincomb = c(lc1, lc2),
+                  family="gaussian", control.family = list(hyper=zero.variance),
+                  control.compute=list(dic=TRUE, cpo=TRUE, config=TRUE)))
+```
+
+```{r, echo=TRUE}
+print(summary(sdem.inla_slm))
+```
+
+```{r, echo=TRUE}
+sdemmarg <- inla.tmarginal(ff, sdem.inla_slm$marginals.hyperpar[[2]]) 
+c(mean=mean(sdemmarg[, "x"]), se=sd(sdemmarg[, "x"]))
+```
+
+```{r, echo=TRUE}
+system.time(mc.samples <- inla.posterior.sample(niter, sdem.inla_slm))
+```
+
+```{r, echo=TRUE}
+smple0 <- t(sapply(mc.samples, function(x) x$latent[100:103]))
+colnames(smple0) <- c("Direct_LAG", "Direct_HOVAL", "Indirect_LAG", "Indirect_HOVAL")
+smple <- cbind(smple0, Total_LAG=smple0[,1]+smple0[,3], Total_HOVAL=smple0[,2]+smple0[,4])
+```
+
+
+```{r, echo=TRUE}
+(sdem.inla_mc_imps1 <- apply(smple, 2, mean)[c(1,3,5,2,4,6)])
+```
+
+```{r, echo=TRUE}
+(sdem.inla_mc_imps2 <- apply(smple, 2, sd)[c(1,3,5,2,4,6)])
+```
+
+
+### SDEM coefficients
+
+```{r, echo=FALSE, results='hide'}
+sdem_ml_coefs <- c(t(rbind(summary(sdem.ml)$Coef[,1:2], 
+                  lambda=c(sdem.ml$lambda, sdem.ml$lambda.se), s2=c(sdem.ml$s2,
+                  NA))))
+sdem_SET0_coefs <- c(t(summary(sdem.SET0)$statistics[,1:2]))
+sdem_SET1_coefs <- c(t(summary(sdem.SET1)$statistics[,1:2]))
+sdem_SET2_coefs <- c(t(summary(sdem.SET2)$statistics[,1:2]))
+sdem_inla_slm_coefs <- c(t(rbind(summary(sdem.inla_slm)$fixed[,1:2],
+                  c(mean=mean(sdemmarg[, "x"]), se=sd(sdemmarg[, "x"])), c(NA,NA))))
+sdem_res <- cbind(sdem_ml_coefs, sdem_SET0_coefs, sdem_SET1_coefs, 
+                  sdem_SET2_coefs, sdem_inla_slm_coefs)
+dnms <- c(t(cbind(c(rownames(summary(sdem.ml)$Coef[,1:2]), "lambda", "s2"), 
+          c(" ", "  ", "   ", "    ", "     ", "      ", "       "))))
+rownames(sdem_res) <- dnms
+```
+
+```{r, echo=TRUE}
+sdem_res
+```
+
+
+### SDEM impacts
+
+```{r, echo=FALSE, results='hide'}
+sdem.ml_impv <- c(t(cbind(c(t(sdem.ml_imps$mat)), c(t(sdem.ml_imps$semat)))))
+sdem.SET0_impv <- c(t(cbind(c(t(sdem.SET0_imps$mat)), c(t(sdem.SET0_imps$semat)))))
+sdem.SET1_impv <- c(t(cbind(c(t(sdem.SET1_imps$mat)), c(t(sdem.SET1_imps$semat)))))
+sdem.SET2_impv <- c(t(cbind(c(t(sdem.SET2_imps$mat)), c(t(sdem.SET2_imps$semat)))))
+sdem.inla_slm_lc <- c(t(rbind(summary(sdem.inla_slm)$fixed[-1,1:2], 
+                      sdem.inla_slm$summary.lincomb.derived[,2:3])[c(1,3,5,2,4,6),]))
+sdem.inla_mc <- c(t(cbind(sdem.inla_mc_imps1, sdem.inla_mc_imps2)))
+
+sdem_imp_res <- cbind(sdem.ml=sdem.ml_impv, sdem.SET0=sdem.SET0_impv,
+                      sdem.SET1=sdem.SET1_impv, sdem.SET2=sdem.SET2_impv,
+                      sdem.inla_slm_lc=sdem.inla_slm_lc,
+                      sdem.inla_mc=sdem.inla_mc)
+rownames(sdem_imp_res) <- imp_nms
+```
+
+```{r, echo=TRUE}
+print(sdem_imp_res)
+```
+
+### SLM ML
+
+```{r, echo=TRUE}
+slm.ml <- lagsarlm(m.form, data = COL.OLD, listw=lw, control=list(pre_eig=ev))
+summary(slm.ml)
+```
+
+
+```{r, echo=TRUE}
+slm.ml_imps <- summary(spatialreg::impacts(slm.ml, tr=tr, R=1000), zstats=TRUE, short=TRUE)
+print(slm.ml_imps)
+```
+
+### SLM SET (griddy Gibbs)
+
+```{r, echo=TRUE}
+system.time(slm.SET0 <- spBreg_lag(m.form, data = COL.OLD, listw=lw,
+              control=list(ndraw=titer, nomit=nomit)))
+```
+
+
+```{r, echo=TRUE}
+summary(slm.SET0)
+```
+
+
+```{r, echo=TRUE}
+slm.SET0_imps <- summary(spatialreg::impacts(slm.SET0, tr=tr), zstats=TRUE, short=TRUE)
+print(slm.SET0_imps)
+```
+
+
+```{r, echo=TRUE}
+raftery.diag(slm.SET0, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(slm.SET0)
+```
+
+### SLM SET (MH)
+
+```{r, echo=TRUE}
+system.time(slm.SET1 <- spBreg_lag(m.form, data = COL.OLD, listw=lw,
+              control=list(ndraw=titer, nomit=nomit, prior=list(rhoMH=TRUE))))
+```
+
+
+```{r, echo=TRUE}
+summary(slm.SET1)
+```
+
+
+```{r, echo=TRUE}
+slm.SET1_imps <- summary(spatialreg::impacts(slm.SET1, tr=tr), zstats=TRUE, short=TRUE)
+print(slm.SET1_imps)
+```
+
+
+```{r, echo=TRUE}
+raftery.diag(slm.SET1, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(slm.SET1)
+```
+
+
+### SLM INLA_slm
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+mm <- model.matrix(m.form, data=COL.OLD)
+betaprec <- .0001
+Q.beta = Diagonal(n=ncol(mm), betaprec)
+args.slm <- list(rho.min = rho.min, rho.max = rho.max, W = sW, X = mm, Q.beta = Q.beta)
+system.time(slm.inla_slm <- inla(CRIME ~ 0 + f(idx, model="slm",
+                  args.slm=args.slm, hyper=hyper.slm), data = COL.OLD,
+                  family="gaussian", control.family = list(hyper=zero.variance),
+                  control.compute=list(dic=TRUE, cpo=TRUE, config=TRUE)))
+```
+
+```{r, echo=TRUE}
+print(summary(slm.inla_slm))
+```
+
+
+```{r, echo=TRUE}
+slmmarg <- inla.tmarginal(ff, slm.inla_slm$marginals.hyperpar[[2]]) 
+c(mean=mean(slmmarg[, "x"]), se=sd(slmmarg[, "x"]))
+```
+
+
+```{r, echo=TRUE}
+slm.inla_slm$summary.random$idx[n+1:ncol(mm),]
+```
+
+
+```{r, echo=TRUE, cache=TRUE}
+system.time(mc.samples <- inla.posterior.sample(niter, slm.inla_slm))
+```
+
+
+```{r, echo=TRUE}
+smples0 <- t(sapply(mc.samples, function(x) c(x$latent[99:101], 
+                                              ff(x$hyperpar[2]), 0)))
+colnames(smples0) <- c("(Intercept)", "INC", "HOVAL", "rho", "sige")
+smples <- as.mcmc(smples0)
+attr(smples, "listw_style") <- "W"
+attr(smples, "control")$interval <- c(rho.min, rho.max)
+attr(smples, "type") <- "lag"
+slm.inla_slm_imps <- summary(spatialreg:::impacts.MCMC_sar_G(smples, tr=tr),
+                             zstats=TRUE, short=TRUE)
+print(slm.inla_slm_imps)
+```
+
+
+### SLM coefficients
+
+```{r, echo=FALSE, results='hide'}
+slm_ml_coefs <- c(t(rbind(summary(slm.ml)$Coef[,1:2], 
+                  rho=c(slm.ml$rho, slm.ml$rho.se), s2=c(slm.ml$s2,
+                                                         NA))))
+slm_SET0_coefs <- c(t(summary(slm.SET0)$statistics[,1:2]))
+slm_SET1_coefs <- c(t(summary(slm.SET1)$statistics[,1:2]))
+slm_inla_slm_coefs <- c(t(rbind(slm.inla_slm$summary.random$idx[50:52,2:3],
+                  c(mean=mean(slmmarg[, "x"]), se=sd(slmmarg[, "x"])), c(NA,NA))))
+
+slm_res <- cbind(slm_ml_coefs, slm_SET0_coefs, slm_SET1_coefs, slm_inla_slm_coefs)
+nms[7] <- "rho"
+rownames(slm_res) <- nms
+```
+
+```{r, echo=TRUE}
+slm_res
+```
+
+### SLM impacts
+
+```{r, echo=FALSE, results='hide'}
+slm.ml_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(slm.ml_imps, NULL))), c(t(slm.ml_imps$semat)))))
+slm.SET0_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(slm.SET0_imps, NULL))), c(t(slm.SET0_imps$semat)))))
+slm.SET1_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(slm.SET1_imps, NULL))), c(t(slm.SET1_imps$semat)))))
+slm.inla_slm_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(slm.inla_slm_imps, NULL))), c(t(slm.inla_slm_imps$semat)))))
+slm_imp_res <- cbind(slm.ml=slm.ml_impv, slm.SET0=slm.SET0_impv, slm.SET1_impv,
+                     slm.inla_slm=slm.inla_slm_impv)
+rownames(slm_imp_res) <- imp_nms
+```
+
+```{r, echo=TRUE}
+print(slm_imp_res)
+```
+
+### SDM ML
+
+```{r, echo=TRUE}
+sdm.ml <- lagsarlm(m.form, data = COL.OLD, listw=lw, Durbin=TRUE, 
+            control=list(pre_eig=ev))
+summary(sdm.ml)
+```
+
+
+```{r, echo=TRUE}
+sdm.ml_imps <- summary(spatialreg::impacts(sdm.ml, tr=tr, R=1000), zstats=TRUE, short=TRUE)
+print(sdm.ml_imps)
+```
+
+### SDM SET (griddy Gibbs)
+
+```{r, echo=TRUE}
+system.time(sdm.SET0 <- spBreg_lag(m.form, data = COL.OLD, listw=lw, Durbin=TRUE,
+              control=list(ndraw=titer, nomit=nomit)))
+```
+
+```{r, echo=TRUE}
+summary(sdm.SET0)
+```
+
+```{r, echo=TRUE}
+sdm.SET0_imps <- summary(spatialreg::impacts(sdm.SET0, tr=tr), zstats=TRUE, short=TRUE)
+print(sdm.SET0_imps)
+```
+
+```{r, echo=TRUE}
+raftery.diag(sdm.SET0, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sdm.SET0)
+```
+
+### SDM SET (MH)
+
+```{r, echo=TRUE}
+system.time(sdm.SET1 <- spBreg_lag(m.form, data = COL.OLD, listw=lw, Durbin=TRUE,
+              control=list(ndraw=titer, nomit=nomit, prior=list(rhoMH=TRUE))))
+```
+
+```{r, echo=TRUE}
+summary(sdm.SET1)
+```
+
+```{r, echo=TRUE}
+sdm.SET1_imps <- summary(spatialreg::impacts(sdm.SET1, tr=tr), zstats=TRUE, short=TRUE)
+print(sdm.SET1_imps)
+```
+
+```{r, echo=TRUE}
+raftery.diag(sdm.SET1, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sdm.SET1)
+```
+
+### SDM INLA_slm
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+mm <- model.matrix(dm.form, data=COL.OLD)
+betaprec <- .0001
+Q.beta = Diagonal(n=ncol(mm), betaprec)
+args.slm <- list(rho.min = rho.min, rho.max = rho.max, W = sW, X = mm, Q.beta = Q.beta)
+system.time(sdm.inla_slm <- inla(CRIME ~ 0 + f(idx, model="slm",
+                  args.slm=args.slm, hyper=hyper.slm), data = COL.OLD,
+                  family="gaussian", control.family = list(hyper=zero.variance),
+                  control.compute=list(dic=TRUE, cpo=TRUE, config=TRUE)))
+```
+
+```{r, echo=TRUE}
+print(summary(sdm.inla_slm))
+```
+
+```{r, echo=TRUE}
+sdmmarg <- inla.tmarginal(ff, sdm.inla_slm$marginals.hyperpar[[2]]) 
+c(mean=mean(sdmmarg[, "x"]), se=sd(sdmmarg[, "x"]))
+```
+
+```{r, echo=TRUE}
+sdm.inla_slm$summary.random$idx[n+1:ncol(mm),]
+```
+
+
+```{r, echo=TRUE, cache=TRUE}
+system.time(mc.samples <- inla.posterior.sample(niter, sdm.inla_slm))
+```
+
+
+```{r, echo=TRUE}
+smples0 <- t(sapply(mc.samples, function(x) c(x$latent[99:103], 
+                                              ff(x$hyperpar[2]), 0)))
+colnames(smples0) <- c("(Intercept)", "INC", "HOVAL", "LAG_INC", "LAG_HOVAL", "rho", "sige")
+smples <- as.mcmc(smples0)
+attr(smples, "listw_style") <- "W"
+attr(smples, "control")$interval <- c(rho.min, rho.max)
+attr(smples, "type") <- "Durbin"
+```
+
+
+```{r, echo=TRUE}
+sdm.inla_slm_imps <- summary(spatialreg:::impacts.MCMC_sar_G(smples, tr=tr),
+                             zstats=TRUE, short=TRUE)
+print(sdm.inla_slm_imps)
+```
+
+
+
+### SDM coefficients
+
+```{r, echo=FALSE, results='hide'}
+sdm_ml_coefs <- c(t(rbind(summary(sdm.ml)$Coef[,1:2], 
+                  rho=c(sdm.ml$lambda, sdm.ml$rho.se), s2=c(sdm.ml$s2,
+                  NA))))
+sdm_SET0_coefs <- c(t(summary(sdm.SET0)$statistics[,1:2]))
+sdm_SET1_coefs <- c(t(summary(sdm.SET1)$statistics[,1:2]))
+sdm_inla_slm_coefs <- c(t(rbind(sdm.inla_slm$summary.random$idx[n+1:ncol(mm),2:3],
+                  c(mean=mean(sdmmarg[, "x"]), se=sd(sdmmarg[, "x"])), c(NA,NA))))
+sdm_res <- cbind(sdm_ml_coefs, sdm_SET0_coefs, sdm_inla_slm_coefs)
+dnms[11] <- "rho"
+rownames(sdm_res) <- dnms
+```
+
+```{r, echo=TRUE}
+sdm_res
+```
+
+### SDM impacts
+
+```{r, echo=FALSE, results='hide'}
+sdm.ml_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sdm.ml_imps, NULL))), c(t(sdm.ml_imps$semat)))))
+sdm.SET0_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sdm.SET0_imps, NULL))), c(t(sdm.SET0_imps$semat)))))
+sdm.SET1_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sdm.SET1_imps, NULL))), c(t(sdm.SET1_imps$semat)))))
+sdm_imp_res <- cbind(sdm.ml=sdm.ml_impv, sdm.SET0=sdm.SET0_impv, sdm.SET1_impv)
+rownames(sdm_imp_res) <- imp_nms
+```
+
+```{r, echo=TRUE}
+print(sdm_imp_res)
+```
+
+### SAC ML
+
+```{r, echo=TRUE}
+sac.ml <- sacsarlm(m.form, data = COL.OLD, listw=lw, Durbin=FALSE, 
+            control=list(pre_eig1=ev, pre_eig2=ev))
+summary(sac.ml)
+```
+
+
+```{r, echo=TRUE}
+sac.ml_imps <- summary(spatialreg::impacts(sac.ml, tr=tr, R=1000), zstats=TRUE, short=TRUE)
+print(sac.ml_imps)
+```
+
+
+### SAC SET (MH)
+
+```{r, echo=TRUE}
+system.time(sac.SET0 <- spBreg_sac(m.form, data = COL.OLD, listw=lw, Durbin=FALSE,
+              control=list(ndraw=titer, nomit=nomit)))
+```
+
+
+```{r, echo=TRUE}
+summary(sac.SET0)
+```
+
+
+```{r, echo=TRUE}
+sac.SET0_imps <- summary(spatialreg::impacts(sac.SET0, tr=tr), zstats=TRUE, short=TRUE)
+print(sac.SET0_imps)
+```
+
+
+### SAC coefficients
+
+```{r, echo=FALSE}
+sac_ml_coefs <- c(t(rbind(summary(sac.ml)$Coef[,1:2], 
+                  rho=c(sac.ml$rho, sac.ml$rho.se), lambda=c(sac.ml$lambda,
+                  sac.ml$lambda.se), s2=c(sac.ml$s2, NA))))
+sac_SET0_coefs <- c(t(summary(sac.SET0)$statistics[,1:2]))
+
+sac_res <- cbind(sac_ml_coefs, sac_SET0_coefs)
+rownames(sac_res) <- c(nms[1:6], "rho", "    ", "lambda", "     ", "s2", "      ")
+```
+
+```{r, echo=TRUE}
+sac_res
+```
+
+### SAC impacts
+
+```{r, echo=FALSE}
+sac.ml_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sac.ml_imps, NULL))),
+                         c(t(sac.ml_imps$semat)))))
+sac.SET0_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sac.SET0_imps, NULL))),
+                           c(t(sac.SET0_imps$semat)))))
+
+sac_imp_res <- cbind(sac.ml=sac.ml_impv, sac.SET0=sac.SET0_impv)
+rownames(sac_imp_res) <- imp_nms
+```
+
+
+```{r, echo=TRUE}
+print(sac_imp_res)
+```
+
+
+### SDAC ML
+
+```{r, echo=TRUE}
+system.time(sdac.ml <- sacsarlm(m.form, data = COL.OLD, listw=lw, Durbin=TRUE, 
+            control=list(pre_eig1=ev, pre_eig2=ev)))
+```
+
+
+```{r, echo=TRUE}
+summary(sdac.ml)
+```
+
+
+```{r, echo=TRUE}
+sdac.ml_imps <- summary(spatialreg::impacts(sdac.ml, tr=tr, R=1000), zstats=TRUE, short=TRUE)
+print(sac.ml_imps)
+```
+
+### SDAC SET (MH)
+
+```{r, echo=TRUE}
+system.time(sdac.SET0 <- spBreg_sac(m.form, data = COL.OLD, listw=lw, Durbin=TRUE,
+              control=list(ndraw=titer, nomit=nomit)))
+```
+
+```{r, echo=TRUE}
+summary(sdac.SET0)
+```
+
+```{r, echo=TRUE}
+sdac.SET0_imps <- summary(spatialreg::impacts(sdac.SET0, tr=tr), zstats=TRUE, short=TRUE)
+print(sdac.SET0_imps)
+```
+
+
+```{r, echo=TRUE}
+raftery.diag(sdac.SET0, r=0.01)
+```
+
+```{r, echo=TRUE}
+geweke.diag(sdac.SET0)
+```
+
+
+### SDAC coefficients
+
+```{r, echo=TRUE, echo=FALSE}
+sdac_ml_coefs <- c(t(rbind(summary(sdac.ml)$Coef[,1:2], 
+                  rho=c(sdac.ml$rho, sdac.ml$rho.se), lambda=c(sdac.ml$lambda,
+                  sdac.ml$lambda.se), s2=c(sdac.ml$s2, NA))))
+sdac_SET0_coefs <- c(t(summary(sdac.SET0)$statistics[,1:2]))
+
+sdac_res <- cbind(sdac_ml_coefs, sdac_SET0_coefs)
+rownames(sdac_res) <- c(dnms[1:10], "rho", "      ", "lambda", "       ", "s2", "        ")
+```
+
+```{r, echo=TRUE}
+sdac_res
+```
+
+### SDAC impacts
+
+```{r, echo=TRUE, echo=FALSE}
+sdac.ml_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sdac.ml_imps, NULL))), c(t(sdac.ml_imps$semat)))))
+sdac.SET0_impv <- c(t(cbind(c(t(spatialreg:::lagImpactMat(sdac.SET0_imps, NULL))), c(t(sdac.SET0_imps$semat)))))
+
+sdac_imp_res <- cbind(sdac.ml=sdac.ml_impv, sdac.SET0=sdac.SET0_impv)
+rownames(sdac_imp_res) <- imp_nms
+```
+
+```{r, echo=TRUE}
+print(sdac_imp_res)
+```
+
+
+
+
+### R's `sessionInfo()`
+
+```{r sI, echo = TRUE}
+sessionInfo()
+```
